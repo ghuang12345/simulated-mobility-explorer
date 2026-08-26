@@ -1,0 +1,56 @@
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+# dependencies
+/node_modules
+/.npm-cache/
+/.npm-logs/
+
+# Never publish raw exports or credentials. The site commits only allowlisted JSON.
+PathIQ.txt
+pathiq.txt
+*.csv
+*.parquet
+*.duckdb
+.aws/
+credentials
+credentials.*
+config
+config.*
+/output/
+/.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
+
+# testing
+/coverage
+
+# next.js
+/.next/
+/.vinext/
+/out/
+
+# misc
+.DS_Store
+*.pem
+
+# debug
+npm-debug.log*
+*.tsbuildinfo
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# env files (can opt-in for committing if needed)
+.env*
+
+# vercel
+.vercel
+
+/dist/
+/.wrangler/
+/outputs/
+/work/
