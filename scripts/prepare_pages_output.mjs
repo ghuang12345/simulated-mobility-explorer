@@ -42,11 +42,30 @@ const [indexPayload, summaryPayload, trackFiles] = await Promise.all([
   readFile(path.join(pagesRoot, "data", "manifest-summary.json"), "utf8").then(JSON.parse),
   readdir(path.join(pagesRoot, "data", "tracks")),
 ]);
-assert.equal(indexPayload.people.length, 766);
-assert.equal(indexPayload.source.row_count, 71_138);
-assert.equal(trackFiles.filter((filename) => filename.endsWith(".json")).length, 766);
+assert.equal(indexPayload.people.length, 814);
+assert.equal(indexPayload.source.row_count, 81_408);
+assert.equal(indexPayload.source.device_count, 814);
+assert.deepEqual(indexPayload.cohorts, [
+  { id: "senate-test", label: "Senate test", row_count: 71_138, device_count: 766, source_index: 0 },
+  { id: "delaware-test", label: "Delaware test", row_count: 10_270, device_count: 48, source_index: 1 },
+]);
+assert.equal(indexPayload.people.filter((person) => person.cohort_id === "delaware-test").length, 48);
+assert.equal(trackFiles.filter((filename) => filename.endsWith(".json")).length, 814);
 assert.equal(summaryPayload.source.sha256_verified, true);
 assert.equal(summaryPayload.verification.private_values_published, false);
+assert.equal(summaryPayload.verification.legacy_people_metadata_unchanged, true);
+assert.equal(summaryPayload.verification.legacy_track_bytes_unchanged, true);
+
+const forbiddenPublicText = /ip_address|source_s3_uri|source_key|source_manifest_index|source_partition|source_file_row_number|source_size_bytes|source_etag|source_last_modified|consent/;
+assert.doesNotMatch(JSON.stringify(indexPayload), forbiddenPublicText);
+assert.doesNotMatch(JSON.stringify(summaryPayload), forbiddenPublicText);
+for (const filename of trackFiles.filter((name) => name.endsWith(".json"))) {
+  const track = JSON.parse(await readFile(path.join(pagesRoot, "data", "tracks", filename), "utf8"));
+  assert.deepEqual(Object.keys(track).sort(), ["fields", "person", "points", "simulation", "v"]);
+  assert.deepEqual(Object.keys(track.person).sort(), ["id", "slug"]);
+  assert.deepEqual(track.fields, ["timestamp_ms", "latitude", "longitude", "horizontal_accuracy_m"]);
+  assert.doesNotMatch(JSON.stringify(track), forbiddenPublicText);
+}
 
 const stagedFiles = await readdir(pagesRoot, { recursive: true });
 assert.equal(

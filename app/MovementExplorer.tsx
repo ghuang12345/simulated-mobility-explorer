@@ -11,10 +11,20 @@ import type {
 
 type BoundingBox = [number, number, number, number];
 
+type CohortSummary = {
+  id: string;
+  label: string;
+  row_count: number;
+  device_count: number;
+  source_index: number;
+};
+
 type PersonSummary = {
   id: string;
   slug: string;
   file: string;
+  cohort_id: string;
+  cohort: string;
   point_count: number;
   unique_timestamp_count: number;
   start_ms: number;
@@ -40,6 +50,7 @@ type ExplorerIndex = {
     end_ms: number;
   };
   bbox: BoundingBox;
+  cohorts: CohortSummary[];
   people: PersonSummary[];
 };
 
@@ -84,6 +95,10 @@ const SIX_HOURS_MS = 6 * 60 * 60 * 1000;
 const SPEED_LIMIT_KMH = 300;
 const PLAYBACK_SPEEDS = [1, 6, 24] as const;
 const DEFAULT_CENTER: [number, number] = [38.8898, -77.0091];
+const BASELINE_COHORT = {
+  id: "senate-test",
+  label: "Senate test",
+} as const;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -127,6 +142,14 @@ function parseIndex(value: unknown): ExplorerIndex {
       id: person.id,
       slug: person.slug,
       file: person.file,
+      cohort_id:
+        typeof person.cohort_id === "string" && person.cohort_id
+          ? person.cohort_id
+          : BASELINE_COHORT.id,
+      cohort:
+        typeof person.cohort === "string" && person.cohort
+          ? person.cohort
+          : BASELINE_COHORT.label,
       point_count: Number(person.point_count),
       unique_timestamp_count: Number(person.unique_timestamp_count),
       start_ms: Number(person.start_ms),
@@ -134,6 +157,49 @@ function parseIndex(value: unknown): ExplorerIndex {
       bbox: person.bbox,
     } satisfies PersonSummary;
   });
+
+  const declaredCohorts = Array.isArray(value.cohorts)
+    ? value.cohorts.flatMap((cohort, cohortIndex) => {
+        if (
+          !isRecord(cohort) ||
+          typeof cohort.id !== "string" ||
+          !cohort.id ||
+          typeof cohort.label !== "string" ||
+          !cohort.label
+        ) {
+          return [];
+        }
+
+        return [{
+          id: cohort.id,
+          label: cohort.label,
+          row_count: Number(cohort.row_count),
+          device_count: Number(cohort.device_count),
+          source_index: Number.isFinite(Number(cohort.source_index))
+            ? Number(cohort.source_index)
+            : cohortIndex,
+        } satisfies CohortSummary];
+      })
+    : [];
+
+  const cohortsById = new Map(declaredCohorts.map((cohort) => [cohort.id, cohort]));
+  for (const person of people) {
+    if (!cohortsById.has(person.cohort_id)) {
+      cohortsById.set(person.cohort_id, {
+        id: person.cohort_id,
+        label: person.cohort,
+        row_count: 0,
+        device_count: people.filter(
+          (candidate) => candidate.cohort_id === person.cohort_id,
+        ).length,
+        source_index: cohortsById.size,
+      });
+    }
+  }
+
+  const cohorts = Array.from(cohortsById.values()).sort(
+    (left, right) => left.source_index - right.source_index,
+  );
 
   return {
     v: 1,
@@ -158,6 +224,7 @@ function parseIndex(value: unknown): ExplorerIndex {
       end_ms: Number(value.time.end_ms),
     },
     bbox: value.bbox,
+    cohorts,
     people,
   };
 }
@@ -357,6 +424,7 @@ export default function MovementExplorer() {
   const [indexUrl, setIndexUrl] = useState("");
   const [indexError, setIndexError] = useState("");
   const [selectedSlug, setSelectedSlug] = useState("");
+  const [cohortFilter, setCohortFilter] = useState("all");
   const [searchTerm, setSearchTerm] = useState("");
   const [track, setTrack] = useState<PreparedTrack | null>(null);
   const [trackError, setTrackError] = useState("");
@@ -397,14 +465,16 @@ export default function MovementExplorer() {
 
   const filteredPeople = useMemo(() => {
     const query = searchTerm.trim().toLocaleLowerCase();
-    if (!query) return people;
     return people.filter(
       (person) =>
-        person.alias.toLocaleLowerCase().includes(query) ||
-        person.id.toLocaleLowerCase().includes(query) ||
-        person.slug.toLocaleLowerCase().includes(query),
+        (cohortFilter === "all" || person.cohort_id === cohortFilter) &&
+        (!query ||
+          person.alias.toLocaleLowerCase().includes(query) ||
+          person.id.toLocaleLowerCase().includes(query) ||
+          person.slug.toLocaleLowerCase().includes(query) ||
+          person.cohort.toLocaleLowerCase().includes(query)),
     );
-  }, [people, searchTerm]);
+  }, [cohortFilter, people, searchTerm]);
 
   const currentFrame = track?.frames[frameIndex] ?? null;
   const currentPoint = currentFrame?.representative ?? null;
@@ -812,6 +882,13 @@ export default function MovementExplorer() {
     setFollowPoint(true);
   };
 
+  const chooseCohort = (cohortId: string) => {
+    setCohortFilter(cohortId);
+    if (cohortId === "all" || selectedPerson?.cohort_id === cohortId) return;
+    const firstPersonInCohort = people.find((person) => person.cohort_id === cohortId);
+    if (firstPersonInCohort) choosePerson(firstPersonInCohort.slug);
+  };
+
   const handleSlider = (timestampMs: number) => {
     if (!track?.frames.length) return;
     const firstTime = track.frames[0].timestampMs;
@@ -878,7 +955,22 @@ export default function MovementExplorer() {
                 <span className="person-total">{people.length || "—"}</span>
               </div>
 
-              <label htmlFor="person-search">Search alias or simulated IFA</label>
+              <label htmlFor="cohort-filter">Cohort</label>
+              <select
+                id="cohort-filter"
+                className="cohort-filter"
+                value={cohortFilter}
+                onChange={(event) => chooseCohort(event.target.value)}
+              >
+                <option value="all">All cohorts</option>
+                {index?.cohorts.map((cohort) => (
+                  <option key={cohort.id} value={cohort.id}>
+                    {cohort.label}
+                  </option>
+                ))}
+              </select>
+
+              <label htmlFor="person-search">Search alias, cohort, or simulated IFA</label>
               <input
                 id="person-search"
                 className="search-input"
@@ -905,7 +997,7 @@ export default function MovementExplorer() {
                 ) : (
                   filteredPeople.map((person) => (
                     <option key={person.slug} value={person.slug}>
-                      {person.alias} · {person.point_count.toLocaleString()} points
+                      {person.alias} · [{person.cohort}] · {person.point_count.toLocaleString()} points
                     </option>
                   ))
                 )}
@@ -913,7 +1005,10 @@ export default function MovementExplorer() {
 
               {selectedPerson ? (
                 <div className="selected-person" aria-live="polite">
-                  <span>{selectedPerson.alias}</span>
+                  <div className="selected-person-heading">
+                    <span>{selectedPerson.alias}</span>
+                    <span className="cohort-badge">{selectedPerson.cohort}</span>
+                  </div>
                   <code>{selectedPerson.id}</code>
                   <small>
                     {selectedPerson.point_count.toLocaleString()} raw observations ·{" "}

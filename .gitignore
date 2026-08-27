@@ -40,6 +40,8 @@ config.*
 # debug
 npm-debug.log*
 *.tsbuildinfo
+__pycache__/
+*.py[cod]
 yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*

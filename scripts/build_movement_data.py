@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Build deterministic, browser-friendly movement data from the simulated CSV.
+"""Build deterministic, browser-friendly movement data from simulated CSVs.
 
-The source CSV is treated as immutable. Before parsing, its SHA-256 must match the
-known completed export. Only four movement fields plus the simulated device ID are
-published; IP-address and source-provenance fields never enter the JSON payloads.
+Both source CSVs are treated as immutable. Before parsing, each SHA-256 must match
+its known completed export. Only four movement fields plus the simulated device ID
+and cohort label are published; IP-address and source-provenance fields never enter
+the JSON payloads.
 """
 
 from __future__ import annotations
@@ -26,11 +27,28 @@ from typing import Mapping, Sequence
 
 
 SCHEMA_VERSION = 1
-EXPECTED_SOURCE_SHA256 = (
+SENATE_COHORT_ID = "senate-test"
+SENATE_COHORT_LABEL = "Senate test"
+SENATE_SOURCE_SHA256 = (
     "a551181a9bc4da5d5ca0b0b0a3ff45be9288ce11257c6923efa982a2ed4eb16b"
 )
-EXPECTED_ROW_COUNT = 71_138
-EXPECTED_DEVICE_COUNT = 766
+SENATE_ROW_COUNT = 71_138
+SENATE_DEVICE_COUNT = 766
+DELAWARE_COHORT_ID = "delaware-test"
+DELAWARE_COHORT_LABEL = "Delaware test"
+DELAWARE_SOURCE_SHA256 = (
+    "d140f6ec04a0ae11b81fa477f922bf9bea729e9d0e2485585d44641958551503"
+)
+DELAWARE_ROW_COUNT = 10_270
+DELAWARE_DEVICE_COUNT = 48
+EXPECTED_TOTAL_ROW_COUNT = SENATE_ROW_COUNT + DELAWARE_ROW_COUNT
+EXPECTED_TOTAL_DEVICE_COUNT = SENATE_DEVICE_COUNT + DELAWARE_DEVICE_COUNT
+LEGACY_PEOPLE_METADATA_SHA256 = (
+    "2f6873b39d9528e15d03f67f0723b0442615601f05d4263368a808b72f6989f1"
+)
+LEGACY_TRACK_SET_SHA256 = (
+    "0f94c07a3b13879e5a7013ace52f8d5b014ce533ce0d464c0dcdfc727c803505"
+)
 SIMULATION_NOTICE = (
     "SIMULATED DATA — All device identifiers and movement records shown here are "
     "fictional exercise data and do not represent real people."
@@ -71,11 +89,42 @@ DEFAULT_SOURCE = (
     / "pathiq_senate_cohort_full_precisiongeo"
     / "precisiongeo_cohort_rows.csv"
 )
+DEFAULT_DELAWARE_SOURCE = (
+    REPOSITORY_ROOT.parent
+    / "output"
+    / "pathiq_point_cohort_full_precisiongeo"
+    / "point_cohort_full_paths.csv"
+)
 DEFAULT_OUTPUT = REPOSITORY_ROOT / "public" / "data"
 
 
 class BuildError(RuntimeError):
     """Raised when source or generated-data verification fails."""
+
+
+@dataclass(frozen=True, slots=True)
+class SourceSpec:
+    cohort_id: str
+    cohort_label: str
+    expected_sha256: str
+    expected_row_count: int
+    expected_device_count: int
+
+
+SENATE_SOURCE_SPEC = SourceSpec(
+    cohort_id=SENATE_COHORT_ID,
+    cohort_label=SENATE_COHORT_LABEL,
+    expected_sha256=SENATE_SOURCE_SHA256,
+    expected_row_count=SENATE_ROW_COUNT,
+    expected_device_count=SENATE_DEVICE_COUNT,
+)
+DELAWARE_SOURCE_SPEC = SourceSpec(
+    cohort_id=DELAWARE_COHORT_ID,
+    cohort_label=DELAWARE_COHORT_LABEL,
+    expected_sha256=DELAWARE_SOURCE_SHA256,
+    expected_row_count=DELAWARE_ROW_COUNT,
+    expected_device_count=DELAWARE_DEVICE_COUNT,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -113,6 +162,8 @@ class PrivatePoint:
 
 @dataclass(frozen=True, slots=True)
 class SourceModel:
+    spec: SourceSpec
+    source_file_name: str
     tracks: Mapping[str, tuple[PrivatePoint, ...]]
     source_bytes: int
     source_sha256: str
@@ -121,6 +172,22 @@ class SourceModel:
     start_ms: int
     end_ms: int
     bbox: tuple[float, float, float, float]
+    public_rows_sha256: str
+
+
+@dataclass(frozen=True, slots=True)
+class DatasetModel:
+    sources: tuple[SourceModel, ...]
+    tracks: Mapping[str, tuple[PrivatePoint, ...]]
+    person_order: tuple[str, ...]
+    cohort_by_person: Mapping[str, str]
+    row_count: int
+    device_count: int
+    physical_locator_count: int
+    start_ms: int
+    end_ms: int
+    bbox: tuple[float, float, float, float]
+    source_set_sha256: str
     public_rows_sha256: str
 
 
@@ -195,24 +262,26 @@ def validate_timestamp_utc(raw: str, timestamp_ms: int, csv_row_number: int) -> 
 
 def normalized_public_rows_digest(
     tracks: Mapping[str, Sequence[PrivatePoint]],
+    person_order: Sequence[str] | None = None,
 ) -> str:
     digest = hashlib.sha256()
-    for person_id in sorted(tracks):
+    ordered_people = tuple(person_order) if person_order is not None else sorted(tracks)
+    for person_id in ordered_people:
         for point in tracks[person_id]:
             digest.update(compact_json([person_id, *point.public_values]))
             digest.update(b"\n")
     return digest.hexdigest()
 
 
-def load_source(source_path: Path) -> SourceModel:
+def load_source(source_path: Path, spec: SourceSpec) -> SourceModel:
     if not source_path.is_file():
         raise BuildError(f"Source CSV not found: {source_path}")
 
     source_sha256_before = sha256_path(source_path)
-    if source_sha256_before != EXPECTED_SOURCE_SHA256:
+    if source_sha256_before != spec.expected_sha256:
         raise BuildError(
             "Source SHA-256 mismatch; refusing to read or generate assets. "
-            f"Expected {EXPECTED_SOURCE_SHA256}, got {source_sha256_before}."
+            f"Expected {spec.expected_sha256}, got {source_sha256_before}."
         )
 
     source_bytes = source_path.stat().st_size
@@ -308,13 +377,14 @@ def load_source(source_path: Path) -> SourceModel:
     source_sha256_after = sha256_path(source_path)
     if source_sha256_after != source_sha256_before:
         raise BuildError("Source CSV changed while it was being read; refusing to build")
-    if row_count != EXPECTED_ROW_COUNT:
+    if row_count != spec.expected_row_count:
         raise BuildError(
-            f"Expected {EXPECTED_ROW_COUNT:,} rows, found {row_count:,}"
+            f"Expected {spec.expected_row_count:,} rows, found {row_count:,}"
         )
-    if len(mutable_tracks) != EXPECTED_DEVICE_COUNT:
+    if len(mutable_tracks) != spec.expected_device_count:
         raise BuildError(
-            f"Expected {EXPECTED_DEVICE_COUNT:,} devices, found {len(mutable_tracks):,}"
+            f"Expected {spec.expected_device_count:,} devices, "
+            f"found {len(mutable_tracks):,}"
         )
     if len(physical_locators) != row_count:
         raise BuildError("Physical source locator count does not equal row count")
@@ -336,6 +406,8 @@ def load_source(source_path: Path) -> SourceModel:
     )
 
     return SourceModel(
+        spec=spec,
+        source_file_name=source_path.name,
         tracks=tracks,
         source_bytes=source_bytes,
         source_sha256=source_sha256_after,
@@ -345,6 +417,69 @@ def load_source(source_path: Path) -> SourceModel:
         end_ms=end_ms,
         bbox=bbox,
         public_rows_sha256=normalized_public_rows_digest(tracks),
+    )
+
+
+def source_descriptor(source: SourceModel, source_index: int) -> dict[str, object]:
+    return {
+        "source_index": source_index,
+        "cohort_id": source.spec.cohort_id,
+        "cohort": source.spec.cohort_label,
+        "file": source.source_file_name,
+        "bytes": source.source_bytes,
+        "sha256": source.source_sha256,
+        "row_count": source.row_count,
+        "device_count": len(source.tracks),
+        "physical_locator_count": source.physical_locator_count,
+    }
+
+
+def combine_sources(sources: Sequence[SourceModel]) -> DatasetModel:
+    if not sources:
+        raise BuildError("At least one source cohort is required")
+    tracks: dict[str, tuple[PrivatePoint, ...]] = {}
+    cohort_by_person: dict[str, str] = {}
+    person_order: list[str] = []
+    for source in sources:
+        for person_id in source.tracks:
+            if person_id in tracks:
+                raise BuildError(
+                    f"Device ID collision across cohorts for {person_id}"
+                )
+            tracks[person_id] = source.tracks[person_id]
+            cohort_by_person[person_id] = source.spec.cohort_id
+            person_order.append(person_id)
+
+    if len(tracks) != len(person_order):
+        raise BuildError("Combined device IDs are not unique")
+    all_points = [point for person_id in person_order for point in tracks[person_id]]
+    row_count = sum(source.row_count for source in sources)
+    if row_count != len(all_points):
+        raise BuildError("Combined source row count differs from track rows")
+    descriptors = [
+        source_descriptor(source, source_index)
+        for source_index, source in enumerate(sources)
+    ]
+    return DatasetModel(
+        sources=tuple(sources),
+        tracks=tracks,
+        person_order=tuple(person_order),
+        cohort_by_person=cohort_by_person,
+        row_count=row_count,
+        device_count=len(tracks),
+        physical_locator_count=sum(
+            source.physical_locator_count for source in sources
+        ),
+        start_ms=min(point.timestamp_ms for point in all_points),
+        end_ms=max(point.timestamp_ms for point in all_points),
+        bbox=(
+            min(point.longitude for point in all_points),
+            min(point.latitude for point in all_points),
+            max(point.longitude for point in all_points),
+            max(point.latitude for point in all_points),
+        ),
+        source_set_sha256=sha256_bytes(compact_json(descriptors)),
+        public_rows_sha256=normalized_public_rows_digest(tracks, person_order),
     )
 
 
@@ -370,13 +505,38 @@ def percentile(values: Sequence[int], fraction: float) -> float:
     return ordered[lower] + (ordered[upper] - ordered[lower]) * (position - lower)
 
 
-def render_assets(model: SourceModel, source_file_name: str) -> RenderedAssets:
+def legacy_person_projection(person: Mapping[str, object]) -> dict[str, object]:
+    return {
+        key: person[key]
+        for key in (
+            "id",
+            "slug",
+            "file",
+            "point_count",
+            "unique_timestamp_count",
+            "start_ms",
+            "end_ms",
+            "bbox",
+        )
+    }
+
+
+def render_assets(model: DatasetModel) -> RenderedAssets:
     people: list[dict[str, object]] = []
     track_payloads: dict[str, bytes] = {}
     used_slugs: set[str] = set()
+    used_ids: set[str] = set()
+    source_by_cohort = {
+        source.spec.cohort_id: source for source in model.sources
+    }
 
-    for person_id in sorted(model.tracks):
+    for person_id in model.person_order:
+        if person_id in used_ids:
+            raise BuildError(f"A device ID collision occurred for {person_id}")
+        used_ids.add(person_id)
         points = model.tracks[person_id]
+        cohort_id = model.cohort_by_person[person_id]
+        cohort = source_by_cohort[cohort_id]
         slug = hashlib.sha256(person_id.encode("utf-8")).hexdigest()[:16]
         if slug in used_slugs:
             raise BuildError(f"A 16-hex track slug collision occurred for {slug}")
@@ -412,9 +572,25 @@ def render_assets(model: SourceModel, source_file_name: str) -> RenderedAssets:
                 "start_ms": points[0].timestamp_ms,
                 "end_ms": points[-1].timestamp_ms,
                 "bbox": person_bbox,
+                "cohort_id": cohort_id,
+                "cohort": cohort.spec.cohort_label,
             }
         )
 
+    source_files = [
+        source_descriptor(source, source_index)
+        for source_index, source in enumerate(model.sources)
+    ]
+    cohorts = [
+        {
+            "id": source.spec.cohort_id,
+            "label": source.spec.cohort_label,
+            "row_count": source.row_count,
+            "device_count": len(source.tracks),
+            "source_index": source_index,
+        }
+        for source_index, source in enumerate(model.sources)
+    ]
     index_value = {
         "v": SCHEMA_VERSION,
         "simulation": {
@@ -422,14 +598,16 @@ def render_assets(model: SourceModel, source_file_name: str) -> RenderedAssets:
             "notice": SIMULATION_NOTICE,
         },
         "source": {
-            "file": source_file_name,
-            "sha256": model.source_sha256,
+            "file": "multiple verified simulated CSV cohorts",
+            "sha256": model.source_set_sha256,
             "row_count": model.row_count,
-            "device_count": len(model.tracks),
+            "device_count": model.device_count,
+            "files": source_files,
         },
         "fields": POINT_FIELDS,
         "time": {"start_ms": model.start_ms, "end_ms": model.end_ms},
         "bbox": list(model.bbox),
+        "cohorts": cohorts,
         "people": people,
     }
     assert_no_forbidden_public_keys(index_value, context="index.json")
@@ -448,6 +626,31 @@ def render_assets(model: SourceModel, source_file_name: str) -> RenderedAssets:
     track_set_bytes = "".join(track_lines).encode("utf-8")
     track_set_sha256 = sha256_bytes(track_set_bytes)
 
+    legacy_people = [
+        legacy_person_projection(person)
+        for person in people[:SENATE_DEVICE_COUNT]
+    ]
+    legacy_people_sha256 = sha256_bytes(compact_json(legacy_people))
+    if legacy_people_sha256 != LEGACY_PEOPLE_METADATA_SHA256:
+        raise BuildError(
+            "The original 766-person index order or metadata changed; "
+            f"expected {LEGACY_PEOPLE_METADATA_SHA256}, got {legacy_people_sha256}"
+        )
+    legacy_track_files = {
+        person["file"] for person in people[:SENATE_DEVICE_COUNT]
+    }
+    legacy_track_lines = [
+        line for line in track_lines if line.split("\t", 1)[0] in legacy_track_files
+    ]
+    legacy_track_set_sha256 = sha256_bytes(
+        "".join(legacy_track_lines).encode("utf-8")
+    )
+    if legacy_track_set_sha256 != LEGACY_TRACK_SET_SHA256:
+        raise BuildError(
+            "The original 766 track bytes changed; "
+            f"expected {LEGACY_TRACK_SET_SHA256}, got {legacy_track_set_sha256}"
+        )
+
     derived_lines = [f"index.json\t{index_sha256}\t{len(index_bytes)}\n"]
     derived_lines.extend(track_lines)
     derived_set_sha256 = sha256_bytes("".join(derived_lines).encode("utf-8"))
@@ -459,20 +662,30 @@ def render_assets(model: SourceModel, source_file_name: str) -> RenderedAssets:
             "notice": SIMULATION_NOTICE,
         },
         "source": {
-            "file": source_file_name,
-            "bytes": model.source_bytes,
-            "sha256_expected": EXPECTED_SOURCE_SHA256,
-            "sha256_actual": model.source_sha256,
-            "sha256_verified": model.source_sha256 == EXPECTED_SOURCE_SHA256,
+            "files": [
+                {
+                    **descriptor,
+                    "sha256_expected": source.spec.expected_sha256,
+                    "sha256_verified": (
+                        source.source_sha256 == source.spec.expected_sha256
+                    ),
+                }
+                for descriptor, source in zip(source_files, model.sources)
+            ],
+            "source_set_sha256": model.source_set_sha256,
+            "sha256_verified": all(
+                source.source_sha256 == source.spec.expected_sha256
+                for source in model.sources
+            ),
             "row_count": model.row_count,
-            "device_count": len(model.tracks),
+            "device_count": model.device_count,
             "physical_locator_count": model.physical_locator_count,
         },
         "derived_dataset": {
             "schema_version": SCHEMA_VERSION,
             "point_fields": POINT_FIELDS,
             "row_count": sum(len(points) for points in model.tracks.values()),
-            "device_count": len(model.tracks),
+            "device_count": model.device_count,
             "start_ms": model.start_ms,
             "end_ms": model.end_ms,
             "bbox": list(model.bbox),
@@ -484,7 +697,12 @@ def render_assets(model: SourceModel, source_file_name: str) -> RenderedAssets:
             "timestamp_then_provenance_order_verified": True,
             "public_schema_allowlisted": True,
             "private_values_published": False,
-            "slug_collision_count": len(model.tracks) - len(used_slugs),
+            "device_id_collision_count": model.device_count - len(used_ids),
+            "slug_collision_count": model.device_count - len(used_slugs),
+            "legacy_people_metadata_sha256": legacy_people_sha256,
+            "legacy_people_metadata_unchanged": True,
+            "legacy_track_set_sha256": legacy_track_set_sha256,
+            "legacy_track_bytes_unchanged": True,
         },
         "outputs": {
             "index": {
@@ -528,7 +746,7 @@ def expected_asset_map(assets: RenderedAssets) -> dict[str, bytes]:
 
 
 def verify_asset_structure(
-    output_dir: Path, model: SourceModel, assets: RenderedAssets
+    output_dir: Path, model: DatasetModel, assets: RenderedAssets
 ) -> None:
     expected = expected_asset_map(assets)
     actual_track_files = {
@@ -555,16 +773,48 @@ def verify_asset_structure(
     summary = json.loads((output_dir / "manifest-summary.json").read_bytes())
     assert_no_forbidden_public_keys(index, context="index.json")
     assert_no_forbidden_public_keys(summary, context="manifest-summary.json")
-    if index["source"]["sha256"] != EXPECTED_SOURCE_SHA256:
-        raise BuildError("index.json does not contain the verified source SHA-256")
+    if index["source"]["sha256"] != model.source_set_sha256:
+        raise BuildError("index.json does not contain the verified source-set SHA-256")
+    if index["source"]["row_count"] != model.row_count:
+        raise BuildError("index.json source row count is incorrect")
+    if index["source"]["device_count"] != model.device_count:
+        raise BuildError("index.json source device count is incorrect")
     if index["simulation"]["is_simulated"] is not True:
         raise BuildError("index.json is missing the simulation flag")
     if index["simulation"]["notice"] != SIMULATION_NOTICE:
         raise BuildError("index.json simulation notice is not canonical")
 
+    expected_cohorts = [
+        {
+            "id": source.spec.cohort_id,
+            "label": source.spec.cohort_label,
+            "row_count": source.row_count,
+            "device_count": len(source.tracks),
+            "source_index": source_index,
+        }
+        for source_index, source in enumerate(model.sources)
+    ]
+    if index.get("cohorts") != expected_cohorts:
+        raise BuildError("index.json cohort metadata is incorrect")
+    people = index["people"]
+    if [person["id"] for person in people] != list(model.person_order):
+        raise BuildError("index.json person order differs from the cohort contract")
+    if len({person["id"] for person in people}) != model.device_count:
+        raise BuildError("index.json contains duplicate person IDs")
+    if len({person["slug"] for person in people}) != model.device_count:
+        raise BuildError("index.json contains duplicate track slugs")
+
     output_digest = hashlib.sha256()
     output_rows = 0
-    for person in index["people"]:
+    source_by_cohort = {
+        source.spec.cohort_id: source for source in model.sources
+    }
+    for person in people:
+        cohort_id = model.cohort_by_person[person["id"]]
+        if person.get("cohort_id") != cohort_id:
+            raise BuildError(f"Cohort ID mismatch for {person['id']}")
+        if person.get("cohort") != source_by_cohort[cohort_id].spec.cohort_label:
+            raise BuildError(f"Cohort label mismatch for {person['id']}")
         track_path = output_dir / person["file"]
         track = json.loads(track_path.read_bytes())
         assert_no_forbidden_public_keys(track, context=person["file"])
@@ -586,7 +836,7 @@ def verify_asset_structure(
             output_digest.update(compact_json([person["id"], *point]))
             output_digest.update(b"\n")
 
-    if output_rows != EXPECTED_ROW_COUNT or output_rows != model.row_count:
+    if output_rows != model.row_count:
         raise BuildError(
             f"Output row count mismatch: expected {model.row_count}, got {output_rows}"
         )
@@ -596,6 +846,19 @@ def verify_asset_structure(
         output_digest.hexdigest()
     ):
         raise BuildError("manifest-summary.json row checksum is incorrect")
+    if summary["source"]["sha256_verified"] is not True:
+        raise BuildError("manifest-summary.json source verification is false")
+    verification = summary["verification"]
+    if verification["device_id_collision_count"] != 0:
+        raise BuildError("manifest-summary.json reports device ID collisions")
+    if verification["slug_collision_count"] != 0:
+        raise BuildError("manifest-summary.json reports slug collisions")
+    if verification["legacy_people_metadata_sha256"] != (
+        LEGACY_PEOPLE_METADATA_SHA256
+    ):
+        raise BuildError("Legacy person metadata checksum changed")
+    if verification["legacy_track_set_sha256"] != LEGACY_TRACK_SET_SHA256:
+        raise BuildError("Legacy track-set checksum changed")
 
 
 def publish_assets(output_dir: Path, assets: RenderedAssets) -> None:
@@ -643,21 +906,58 @@ def publish_assets(output_dir: Path, assets: RenderedAssets) -> None:
         track_dir.chmod(0o755)
 
 
-def build_or_verify(source_path: Path, output_dir: Path, verify_only: bool) -> None:
-    model = load_source(source_path)
-    assets = render_assets(model, source_path.name)
+def load_dataset(source_path: Path, delaware_source_path: Path) -> DatasetModel:
+    senate = load_source(source_path, SENATE_SOURCE_SPEC)
+    delaware = load_source(delaware_source_path, DELAWARE_SOURCE_SPEC)
+    model = combine_sources((senate, delaware))
+    if model.row_count != EXPECTED_TOTAL_ROW_COUNT:
+        raise BuildError(
+            f"Expected {EXPECTED_TOTAL_ROW_COUNT:,} combined rows, "
+            f"found {model.row_count:,}"
+        )
+    if model.device_count != EXPECTED_TOTAL_DEVICE_COUNT:
+        raise BuildError(
+            f"Expected {EXPECTED_TOTAL_DEVICE_COUNT:,} combined devices, "
+            f"found {model.device_count:,}"
+        )
+    return model
+
+
+def build_or_verify(
+    source_path: Path,
+    delaware_source_path: Path,
+    output_dir: Path,
+    verify_only: bool,
+) -> None:
+    model = load_dataset(source_path, delaware_source_path)
+    assets = render_assets(model)
     if not verify_only:
         publish_assets(output_dir, assets)
     verify_asset_structure(output_dir, model, assets)
+    for source, path in zip(model.sources, (source_path, delaware_source_path)):
+        if sha256_path(path) != source.source_sha256:
+            raise BuildError(f"Immutable source changed during the build: {path}")
 
     action = "Verified" if verify_only else "Built and verified"
     print(
         json.dumps(
             {
                 "status": action,
-                "source_sha256": model.source_sha256,
+                "source_set_sha256": model.source_set_sha256,
+                "source_sha256": [
+                    source.source_sha256 for source in model.sources
+                ],
                 "source_rows": model.row_count,
-                "devices": len(model.tracks),
+                "devices": model.device_count,
+                "cohorts": [
+                    {
+                        "id": source.spec.cohort_id,
+                        "label": source.spec.cohort_label,
+                        "rows": source.row_count,
+                        "devices": len(source.tracks),
+                    }
+                    for source in model.sources
+                ],
                 "track_files": len(assets.track_bytes),
                 "index_bytes": len(assets.index_bytes),
                 "track_bytes": assets.total_track_bytes,
@@ -681,6 +981,12 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
         help="Immutable completed PrecisionGeo CSV",
     )
     parser.add_argument(
+        "--delaware-source",
+        type=Path,
+        default=DEFAULT_DELAWARE_SOURCE,
+        help="Immutable completed Delaware-test full-path PrecisionGeo CSV",
+    )
+    parser.add_argument(
         "--output",
         type=Path,
         default=DEFAULT_OUTPUT,
@@ -699,6 +1005,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         build_or_verify(
             source_path=args.source.resolve(),
+            delaware_source_path=args.delaware_source.resolve(),
             output_dir=args.output.resolve(),
             verify_only=args.verify_only,
         )

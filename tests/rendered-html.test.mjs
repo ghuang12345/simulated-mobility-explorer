@@ -10,6 +10,7 @@ test("static export contains the Traceframe application shell", async () => {
   assert.match(html, /Traceframe/);
   assert.match(html, /Simulated data/i);
   assert.match(html, /Training exercise/i);
+  assert.match(html, /81,408 fictional mobility observations across 814 simulated tracks/i);
   assert.doesNotMatch(html, /codex-preview|SkeletonPreview|react-loading-skeleton/i);
 });
 
@@ -21,10 +22,16 @@ test("derived public data is complete and allowlisted", async () => {
   ]);
 
   assert.equal(index.simulation.is_simulated, true);
-  assert.equal(index.source.row_count, 71_138);
-  assert.equal(index.source.device_count, 766);
-  assert.equal(index.people.length, 766);
-  assert.equal(trackFiles.filter((name) => name.endsWith(".json")).length, 766);
+  assert.equal(index.source.row_count, 81_408);
+  assert.equal(index.source.device_count, 814);
+  assert.equal(index.people.length, 814);
+  assert.deepEqual(index.cohorts, [
+    { id: "senate-test", label: "Senate test", row_count: 71_138, device_count: 766, source_index: 0 },
+    { id: "delaware-test", label: "Delaware test", row_count: 10_270, device_count: 48, source_index: 1 },
+  ]);
+  assert.equal(index.people.filter((person) => person.cohort_id === "senate-test").length, 766);
+  assert.equal(index.people.filter((person) => person.cohort_id === "delaware-test").length, 48);
+  assert.equal(trackFiles.filter((name) => name.endsWith(".json")).length, 814);
   assert.deepEqual(index.fields, [
     "timestamp_ms",
     "latitude",
@@ -34,9 +41,25 @@ test("derived public data is complete and allowlisted", async () => {
   assert.equal(summary.source.sha256_verified, true);
   assert.equal(summary.verification.all_source_rows_preserved, true);
   assert.equal(summary.verification.private_values_published, false);
+  assert.equal(summary.verification.legacy_people_metadata_unchanged, true);
+  assert.equal(summary.verification.legacy_track_bytes_unchanged, true);
 
-  const serialized = JSON.stringify(index);
-  assert.doesNotMatch(serialized, /ip_address|source_s3_uri|source_etag|consent/i);
+  const forbidden = /ip_address|source_s3_uri|source_key|source_manifest_index|source_partition|source_file_row_number|source_size_bytes|source_etag|source_last_modified|consent/i;
+  assert.doesNotMatch(JSON.stringify(index), forbidden);
+  assert.doesNotMatch(JSON.stringify(summary), forbidden);
+
+  for (const filename of trackFiles.filter((name) => name.endsWith(".json"))) {
+    const track = JSON.parse(await readFile(new URL(`../public/data/tracks/${filename}`, import.meta.url), "utf8"));
+    assert.deepEqual(Object.keys(track).sort(), ["fields", "person", "points", "simulation", "v"]);
+    assert.deepEqual(Object.keys(track.person).sort(), ["id", "slug"]);
+    assert.deepEqual(track.fields, [
+      "timestamp_ms",
+      "latitude",
+      "longitude",
+      "horizontal_accuracy_m",
+    ]);
+    assert.doesNotMatch(JSON.stringify(track), forbidden);
+  }
 });
 
 test("production export carries every derived asset", async () => {
@@ -47,7 +70,7 @@ test("production export carries every derived asset", async () => {
   ]);
 
   assert.deepEqual(exportedTracks.sort(), sourceTracks.sort());
-  assert.ok(exportedIndex.size > 100_000);
+  assert.ok(exportedIndex.size > 200_000);
 });
 
 void projectRoot;

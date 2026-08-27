@@ -192,6 +192,24 @@ code { font-family: var(--mono); }
   letter-spacing: .04em;
 }
 
+.person-picker > label:not(:first-of-type) {
+  display: block;
+  margin-top: 12px;
+}
+
+.cohort-filter {
+  width: 100%;
+  min-height: 40px;
+  margin-top: 7px;
+  padding: 9px 34px 9px 11px;
+  border: 1px solid var(--line-bright);
+  border-radius: 8px;
+  background: #0b0f0d;
+  color: var(--text);
+}
+
+.cohort-filter:focus { border-color: var(--mint); }
+
 .search-input {
   width: 100%;
   min-height: 42px;
@@ -241,6 +259,27 @@ code { font-family: var(--mono); }
 .selected-person > span { font-weight: 750; }
 .selected-person code { overflow-wrap: anywhere; color: var(--mint); font-size: 10px; }
 .selected-person small { color: var(--muted); font-size: 10px; }
+
+.selected-person-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.selected-person-heading > span:first-child { font-weight: 750; }
+
+.cohort-badge {
+  flex: 0 0 auto;
+  padding: 4px 7px;
+  border: 1px solid #3f6c88;
+  border-radius: 999px;
+  background: rgba(35, 91, 126, .26);
+  color: #bfe4fb;
+  font: 700 9px/1 var(--mono);
+  letter-spacing: .03em;
+  white-space: nowrap;
+}
 
 .compact-heading { margin-bottom: 14px; }
 
