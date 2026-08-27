@@ -14,6 +14,22 @@ test("static export contains the Traceframe application shell", async () => {
   assert.doesNotMatch(html, /codex-preview|SkeletonPreview|react-loading-skeleton/i);
 });
 
+test("the movement index cannot be hidden by a stale browser cache", async () => {
+  const explorerSource = await readFile(
+    new URL("../app/MovementExplorer.tsx", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(
+    explorerSource,
+    /fetch\(dataUrl,\s*\{\s*cache:\s*"no-store"\s*\}\)/,
+  );
+  assert.doesNotMatch(
+    explorerSource,
+    /fetch\(dataUrl,\s*\{\s*cache:\s*"force-cache"\s*\}\)/,
+  );
+});
+
 test("derived public data is complete and allowlisted", async () => {
   const [index, summary, trackFiles] = await Promise.all([
     readFile(new URL("../public/data/index.json", import.meta.url), "utf8").then(JSON.parse),

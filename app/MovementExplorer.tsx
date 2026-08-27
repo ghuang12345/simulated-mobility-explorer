@@ -493,7 +493,9 @@ export default function MovementExplorer() {
     async function loadIndex() {
       try {
         const dataUrl = new URL("data/index.json", document.baseURI);
-        const response = await fetch(dataUrl, { cache: "force-cache" });
+        // The index is the mutable entry point for each published dataset. Always
+        // bypass the browser cache so a newly deployed cohort appears immediately.
+        const response = await fetch(dataUrl, { cache: "no-store" });
         if (!response.ok) {
           throw new Error(`Movement index request failed (${response.status}).`);
         }
