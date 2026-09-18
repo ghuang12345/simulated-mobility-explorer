@@ -42,17 +42,17 @@ const [indexPayload, summaryPayload, trackFiles] = await Promise.all([
   readFile(path.join(pagesRoot, "data", "manifest-summary.json"), "utf8").then(JSON.parse),
   readdir(path.join(pagesRoot, "data", "tracks")),
 ]);
-assert.equal(indexPayload.people.length, 950);
-assert.equal(indexPayload.source.row_count, 83_705);
-assert.equal(indexPayload.source.device_count, 950);
+assert.equal(indexPayload.people.length, 814);
+assert.equal(indexPayload.source.row_count, 81_408);
+assert.equal(indexPayload.source.device_count, 814);
 assert.deepEqual(indexPayload.cohorts, [
   { id: "senate-test", label: "Senate test", row_count: 71_138, device_count: 766, source_index: 0 },
   { id: "delaware-test", label: "Delaware test", row_count: 10_270, device_count: 48, source_index: 1 },
-  { id: "test-2", label: "Test 2", row_count: 2_297, device_count: 136, source_index: 2 },
+  { id: "test-2", label: "Test 2", row_count: 0, device_count: 0, source_index: 2 },
 ]);
 assert.equal(indexPayload.people.filter((person) => person.cohort_id === "delaware-test").length, 48);
-assert.equal(indexPayload.people.filter((person) => person.cohort_id === "test-2").length, 136);
-assert.equal(trackFiles.filter((filename) => filename.endsWith(".json")).length, 950);
+assert.equal(indexPayload.people.filter((person) => person.cohort_id === "test-2").length, 0);
+assert.equal(trackFiles.filter((filename) => filename.endsWith(".json")).length, 814);
 assert.equal(summaryPayload.source.sha256_verified, true);
 assert.equal(summaryPayload.verification.private_values_published, false);
 assert.equal(summaryPayload.verification.legacy_people_metadata_unchanged, true);

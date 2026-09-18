@@ -462,6 +462,8 @@ export default function MovementExplorer() {
     () => people.find((person) => person.slug === selectedSlug) ?? null,
     [people, selectedSlug],
   );
+  const emptyTest2 = cohortFilter === "test-2" &&
+    index?.cohorts.some((cohort) => cohort.id === "test-2" && cohort.device_count === 0);
 
   const filteredPeople = useMemo(() => {
     const query = searchTerm.trim().toLocaleLowerCase();
@@ -605,17 +607,22 @@ export default function MovementExplorer() {
   }, [playheadMs]);
 
   useEffect(() => {
-    if (!track || !selectedSlug || !track.frames[frameIndex]) return;
+    if (!index) return;
     const url = new URL(window.location.href);
     if (cohortFilter === "all") {
       url.searchParams.delete("cohort");
     } else {
       url.searchParams.set("cohort", cohortFilter);
     }
-    url.searchParams.set("person", selectedSlug);
-    url.searchParams.set("t", String(track.frames[frameIndex].timestampMs));
+    if (track && selectedSlug && track.frames[frameIndex]) {
+      url.searchParams.set("person", selectedSlug);
+      url.searchParams.set("t", String(track.frames[frameIndex].timestampMs));
+    } else if (!selectedSlug) {
+      url.searchParams.delete("person");
+      url.searchParams.delete("t");
+    }
     window.history.replaceState(null, "", url);
-  }, [cohortFilter, frameIndex, selectedSlug, track]);
+  }, [cohortFilter, frameIndex, index, selectedSlug, track]);
 
   useEffect(() => {
     let cancelled = false;
@@ -900,9 +907,22 @@ export default function MovementExplorer() {
   const chooseCohort = (cohortId: string) => {
     setCohortFilter(cohortId);
     setSearchTerm("");
-    if (cohortId === "all" || selectedPerson?.cohort_id === cohortId) return;
-    const firstPersonInCohort = people.find((person) => person.cohort_id === cohortId);
-    if (firstPersonInCohort) choosePerson(firstPersonInCohort.slug);
+    if (selectedPerson && (cohortId === "all" || selectedPerson.cohort_id === cohortId)) return;
+    const firstPersonInCohort = people.find(
+      (person) => cohortId === "all" || person.cohort_id === cohortId,
+    );
+    if (firstPersonInCohort) {
+      choosePerson(firstPersonInCohort.slug);
+    } else {
+      pendingDeepLinkRef.current = null;
+      setSelectedSlug("");
+      setTrack(null);
+      setTrackLoading(false);
+      setTrackError("");
+      setPlaying(false);
+      setFrameIndex(0);
+      setPlayheadMs(0);
+    }
   };
 
   const handleSlider = (timestampMs: number) => {
@@ -1171,7 +1191,14 @@ export default function MovementExplorer() {
               </div>
               {!track && !trackLoading ? (
                 <div className="map-empty-state">
-                  <p>Select a simulated person to inspect their movement trace.</p>
+                  {emptyTest2 ? (
+                    <>
+                      <p><strong>No Senate-area observations in Test 2.</strong></p>
+                      <p>All 66,710,407 PIN observations were checked. None falls within 250 metres of the Senate-area building footprints.</p>
+                    </>
+                  ) : (
+                    <p>Select a simulated person to inspect their movement trace.</p>
+                  )}
                 </div>
               ) : null}
             </div>

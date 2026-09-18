@@ -46,10 +46,10 @@ DELAWARE_DEVICE_COUNT = 48
 TEST_2_COHORT_ID = "test-2"
 TEST_2_COHORT_LABEL = "Test 2"
 TEST_2_SOURCE_SHA256 = (
-    "92034025b83b6f450b4648d084cda961c53039a3d4c3c7c75556968b781a9fa4"
+    "311d3e50b32ac98695320ef08fcc6058bfe84e42301978ec64f9b7fe81da3258"
 )
-TEST_2_ROW_COUNT = 2_297
-TEST_2_DEVICE_COUNT = 136
+TEST_2_ROW_COUNT = 0
+TEST_2_DEVICE_COUNT = 0
 EXPECTED_TOTAL_ROW_COUNT = SENATE_ROW_COUNT + DELAWARE_ROW_COUNT + TEST_2_ROW_COUNT
 EXPECTED_TOTAL_DEVICE_COUNT = (
     SENATE_DEVICE_COUNT + DELAWARE_DEVICE_COUNT + TEST_2_DEVICE_COUNT
@@ -122,7 +122,7 @@ DEFAULT_DELAWARE_SOURCE = (
 DEFAULT_TEST_2_SOURCE = (
     REPOSITORY_ROOT.parent
     / "outputs"
-    / "simulated_capitol_hill_136"
+    / "simulated_pin_senate_250m"
     / "pin_observations.tsv.gz"
 )
 DEFAULT_OUTPUT = REPOSITORY_ROOT / "public" / "data"
@@ -209,9 +209,9 @@ class SourceModel:
     source_sha256: str
     row_count: int
     physical_locator_count: int
-    start_ms: int
-    end_ms: int
-    bbox: tuple[float, float, float, float]
+    start_ms: int | None
+    end_ms: int | None
+    bbox: tuple[float, float, float, float] | None
     public_rows_sha256: str
 
 
@@ -530,14 +530,14 @@ def finalize_source(
         tracks[person_id] = ordered
         all_points.extend(ordered)
 
-    start_ms = min(point.timestamp_ms for point in all_points)
-    end_ms = max(point.timestamp_ms for point in all_points)
+    start_ms = min((point.timestamp_ms for point in all_points), default=None)
+    end_ms = max((point.timestamp_ms for point in all_points), default=None)
     bbox = (
         min(point.longitude for point in all_points),
         min(point.latitude for point in all_points),
         max(point.longitude for point in all_points),
         max(point.latitude for point in all_points),
-    )
+    ) if all_points else None
 
     return SourceModel(
         spec=spec,

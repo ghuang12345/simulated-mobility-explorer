@@ -7,14 +7,14 @@ export const metadata: Metadata = {
   description: "Explore time-ordered movement observations from a simulated training dataset.",
   openGraph: {
     title: "Traceframe — Simulated Mobility Explorer",
-    description: "Replay and inspect 83,705 fictional mobility observations across 950 simulated tracks, including Test 2.",
+    description: "Replay and inspect 81,408 fictional mobility observations across 814 simulated tracks. Test 2 has no qualifying observations.",
     type: "website",
     images: [{ url: "og.png", width: 1730, height: 909, alt: "Traceframe simulated mobility explorer" }],
   },
   twitter: {
     card: "summary_large_image",
     title: "Traceframe — Simulated Mobility Explorer",
-    description: "Replay and inspect 83,705 fictional mobility observations across 950 simulated tracks, including Test 2.",
+    description: "Replay and inspect 81,408 fictional mobility observations across 814 simulated tracks. Test 2 has no qualifying observations.",
     images: ["og.png"],
   },
 };

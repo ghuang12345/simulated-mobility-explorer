@@ -56,9 +56,9 @@ class MovementDataBuilderTests(unittest.TestCase):
         self.assertEqual(
             build.sha256_path(build.DEFAULT_TEST_2_SOURCE), self.test_2_sha_before
         )
-        self.assertEqual(self.model.row_count, 83_705)
-        self.assertEqual(self.model.device_count, 950)
-        self.assertEqual(len(self.model.tracks), 950)
+        self.assertEqual(self.model.row_count, 81_408)
+        self.assertEqual(self.model.device_count, 814)
+        self.assertEqual(len(self.model.tracks), 814)
 
     def test_cohort_contract_and_append_only_alias_order(self) -> None:
         self.assertEqual(
@@ -81,14 +81,14 @@ class MovementDataBuilderTests(unittest.TestCase):
                 {
                     "id": "test-2",
                     "label": "Test 2",
-                    "row_count": 2_297,
-                    "device_count": 136,
+                    "row_count": 0,
+                    "device_count": 0,
                     "source_index": 2,
                 },
             ],
         )
         people = self.index["people"]
-        self.assertEqual(len(people), 950)
+        self.assertEqual(len(people), 814)
         self.assertTrue(
             all(person["cohort"] == "Senate test" for person in people[:766])
         )
@@ -137,9 +137,9 @@ class MovementDataBuilderTests(unittest.TestCase):
 
     def test_ids_slugs_and_public_schema_are_safe(self) -> None:
         people = self.index["people"]
-        self.assertEqual(len({person["id"] for person in people}), 950)
-        self.assertEqual(len({person["slug"] for person in people}), 950)
-        self.assertEqual(len({person["file"] for person in people}), 950)
+        self.assertEqual(len({person["id"] for person in people}), 814)
+        self.assertEqual(len({person["slug"] for person in people}), 814)
+        self.assertEqual(len({person["file"] for person in people}), 814)
         self.assertEqual(
             self.summary["verification"]["device_id_collision_count"], 0
         )
@@ -176,8 +176,8 @@ class MovementDataBuilderTests(unittest.TestCase):
     def test_expected_derived_file_set_has_no_slug_collision(self) -> None:
         files = sorted(self.assets.track_bytes)
         digest = hashlib.sha256("\n".join(files).encode("utf-8")).hexdigest()
-        self.assertEqual(len(files), 950)
-        self.assertEqual(len(set(files)), 950)
+        self.assertEqual(len(files), 814)
+        self.assertEqual(len(set(files)), 814)
         self.assertEqual(len(digest), 64)
 
     def test_pin_rows_reconcile_without_deduplication_or_invented_accuracy(self) -> None:
@@ -199,8 +199,8 @@ class MovementDataBuilderTests(unittest.TestCase):
             for point in points
         )
         self.assertEqual(actual, expected)
-        self.assertEqual(sum(actual.values()), 2_297)
-        self.assertEqual(len(self.test_2.tracks), 136)
+        self.assertEqual(sum(actual.values()), 0)
+        self.assertEqual(len(self.test_2.tracks), 0)
         for person in self.index["people"][814:]:
             track = json.loads(self.assets.track_bytes[person["file"]])
             self.assertTrue(all(point[3] is None for point in track["points"]))
@@ -222,6 +222,14 @@ class PinSourceLoadingTests(unittest.TestCase):
                 len(rows), len({row[0] for row in rows}), "pin-tsv-gz",
             )
             return build.load_source(source, spec)
+
+    def test_empty_geofence_cohort_has_no_invented_extent(self) -> None:
+        model = self.load_rows([])
+        self.assertEqual(model.row_count, 0)
+        self.assertEqual(model.tracks, {})
+        self.assertIsNone(model.start_ms)
+        self.assertIsNone(model.end_ms)
+        self.assertIsNone(model.bbox)
 
     def test_seconds_conversion_duplicate_rows_and_source_order_for_ties(self) -> None:
         person_id = "a" * 40
