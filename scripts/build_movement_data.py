@@ -1,20 +1,22 @@
 #!/usr/bin/env python3
-"""Build deterministic, browser-friendly movement data from simulated CSVs.
+"""Build deterministic, browser-friendly movement data from simulated exports.
 
-Both source CSVs are treated as immutable. Before parsing, each SHA-256 must match
-its known completed export. Only four movement fields plus the simulated device ID
-and cohort label are published; IP-address and source-provenance fields never enter
-the JSON payloads.
+Source CSVs and gzip TSVs are treated as immutable. Before parsing, each SHA-256
+must match its known completed export. Only four movement fields plus the simulated
+device ID and cohort label are published; IP-address and source-provenance fields
+never enter the JSON payloads.
 """
 
 from __future__ import annotations
 
 import argparse
 import csv
+import gzip
 import hashlib
 import json
 import math
 import os
+import re
 import statistics
 import sys
 import tempfile
@@ -41,8 +43,24 @@ DELAWARE_SOURCE_SHA256 = (
 )
 DELAWARE_ROW_COUNT = 10_270
 DELAWARE_DEVICE_COUNT = 48
-EXPECTED_TOTAL_ROW_COUNT = SENATE_ROW_COUNT + DELAWARE_ROW_COUNT
-EXPECTED_TOTAL_DEVICE_COUNT = SENATE_DEVICE_COUNT + DELAWARE_DEVICE_COUNT
+TEST_2_COHORT_ID = "test-2"
+TEST_2_COHORT_LABEL = "Test 2"
+TEST_2_SOURCE_SHA256 = (
+    "92034025b83b6f450b4648d084cda961c53039a3d4c3c7c75556968b781a9fa4"
+)
+TEST_2_ROW_COUNT = 2_297
+TEST_2_DEVICE_COUNT = 136
+EXPECTED_TOTAL_ROW_COUNT = SENATE_ROW_COUNT + DELAWARE_ROW_COUNT + TEST_2_ROW_COUNT
+EXPECTED_TOTAL_DEVICE_COUNT = (
+    SENATE_DEVICE_COUNT + DELAWARE_DEVICE_COUNT + TEST_2_DEVICE_COUNT
+)
+PRE_TEST_2_DEVICE_COUNT = SENATE_DEVICE_COUNT + DELAWARE_DEVICE_COUNT
+PRE_TEST_2_PEOPLE_METADATA_SHA256 = (
+    "bbc82e026699b1b257e60e42f1c77aa2ac57eb6f7392367b09d2d2c590391fde"
+)
+PRE_TEST_2_TRACK_SET_SHA256 = (
+    "26e595b022fc069c6123609e9586c26923cb32919bf580101023da2386cb2ad5"
+)
 LEGACY_PEOPLE_METADATA_SHA256 = (
     "2f6873b39d9528e15d03f67f0723b0442615601f05d4263368a808b72f6989f1"
 )
@@ -70,6 +88,12 @@ REQUIRED_SOURCE_COLUMNS = {
     "source_file_row_number",
     "source_key",
 }
+REQUIRED_PIN_COLUMNS = {
+    "Hashed Device ID",
+    "Lat of Visit",
+    "Lon of Visit",
+    "Unix Timestamp of Visit",
+}
 FORBIDDEN_PUBLIC_KEYS = {
     "ip_address",
     "source_s3_uri",
@@ -95,6 +119,12 @@ DEFAULT_DELAWARE_SOURCE = (
     / "pathiq_point_cohort_full_precisiongeo"
     / "point_cohort_full_paths.csv"
 )
+DEFAULT_TEST_2_SOURCE = (
+    REPOSITORY_ROOT.parent
+    / "outputs"
+    / "simulated_capitol_hill_136"
+    / "pin_observations.tsv.gz"
+)
 DEFAULT_OUTPUT = REPOSITORY_ROOT / "public" / "data"
 
 
@@ -109,6 +139,7 @@ class SourceSpec:
     expected_sha256: str
     expected_row_count: int
     expected_device_count: int
+    source_format: str = "precisiongeo-csv"
 
 
 SENATE_SOURCE_SPEC = SourceSpec(
@@ -126,6 +157,15 @@ DELAWARE_SOURCE_SPEC = SourceSpec(
     expected_device_count=DELAWARE_DEVICE_COUNT,
 )
 
+TEST_2_SOURCE_SPEC = SourceSpec(
+    cohort_id=TEST_2_COHORT_ID,
+    cohort_label=TEST_2_COHORT_LABEL,
+    expected_sha256=TEST_2_SOURCE_SHA256,
+    expected_row_count=TEST_2_ROW_COUNT,
+    expected_device_count=TEST_2_DEVICE_COUNT,
+    source_format="pin-tsv-gz",
+)
+
 
 @dataclass(frozen=True, slots=True)
 class PrivatePoint:
@@ -134,7 +174,7 @@ class PrivatePoint:
     timestamp_ms: int
     latitude: float
     longitude: float
-    horizontal_accuracy_m: float
+    horizontal_accuracy_m: float | None
     source_manifest_index: int
     source_file_row_number: int
     source_key: str
@@ -151,7 +191,7 @@ class PrivatePoint:
         )
 
     @property
-    def public_values(self) -> list[int | float]:
+    def public_values(self) -> list[int | float | None]:
         return [
             self.timestamp_ms,
             self.latitude,
@@ -274,6 +314,10 @@ def normalized_public_rows_digest(
 
 
 def load_source(source_path: Path, spec: SourceSpec) -> SourceModel:
+    if spec.source_format == "pin-tsv-gz":
+        return load_pin_source(source_path, spec)
+    if spec.source_format != "precisiongeo-csv":
+        raise BuildError(f"Unsupported source format: {spec.source_format}")
     if not source_path.is_file():
         raise BuildError(f"Source CSV not found: {source_path}")
 
@@ -374,9 +418,99 @@ def load_source(source_path: Path, spec: SourceSpec) -> SourceModel:
                 )
             )
 
+    return finalize_source(
+        source_path, spec, source_sha256_before, source_bytes,
+        mutable_tracks, physical_locators, row_count,
+    )
+
+
+def load_pin_source(source_path: Path, spec: SourceSpec) -> SourceModel:
+    """Load artificial PIN rows, retaining duplicates and source order for ties."""
+    if not source_path.is_file():
+        raise BuildError(f"Source PIN TSV not found: {source_path}")
+    source_sha256_before = sha256_path(source_path)
+    if source_sha256_before != spec.expected_sha256:
+        raise BuildError(
+            "Source SHA-256 mismatch; refusing to read or generate assets. "
+            f"Expected {spec.expected_sha256}, got {source_sha256_before}."
+        )
+
+    source_bytes = source_path.stat().st_size
+    mutable_tracks: dict[str, list[PrivatePoint]] = defaultdict(list)
+    physical_locators: set[tuple[int, int]] = set()
+    row_count = 0
+    with gzip.open(source_path, "rt", encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle, delimiter="\t")
+        if reader.fieldnames is None:
+            raise BuildError("Source PIN TSV has no header")
+        missing_columns = sorted(REQUIRED_PIN_COLUMNS - set(reader.fieldnames))
+        if missing_columns:
+            raise BuildError(
+                "Source PIN TSV is missing required columns: "
+                + ", ".join(missing_columns)
+            )
+        for row_number, row in enumerate(reader, start=2):
+            row_count += 1
+            person_id = row["Hashed Device ID"]
+            if not isinstance(person_id, str) or not re.fullmatch(
+                r"[0-9a-f]{40}", person_id
+            ):
+                raise BuildError(
+                    f"PIN row {row_number}: Hashed Device ID is not lowercase 40-hex"
+                )
+            timestamp_seconds = parse_integer(
+                row["Unix Timestamp of Visit"],
+                column="Unix Timestamp of Visit",
+                csv_row_number=row_number,
+            )
+            if not 1_000_000_000 <= timestamp_seconds < 10_000_000_000:
+                raise BuildError(
+                    f"PIN row {row_number}: timestamp is not 10-digit epoch seconds"
+                )
+            latitude = parse_finite_float(
+                row["Lat of Visit"], column="Lat of Visit", csv_row_number=row_number
+            )
+            longitude = parse_finite_float(
+                row["Lon of Visit"], column="Lon of Visit", csv_row_number=row_number
+            )
+            if not -90 <= latitude <= 90:
+                raise BuildError(f"PIN row {row_number}: latitude is out of range")
+            if not -180 <= longitude <= 180:
+                raise BuildError(f"PIN row {row_number}: longitude is out of range")
+
+            # The PIN schema has no accuracy or original partition locator.
+            # Its physical row is the tie breaker, preserving repeated observations.
+            physical_locators.add((0, row_number))
+            mutable_tracks[person_id].append(
+                PrivatePoint(
+                    timestamp_ms=timestamp_seconds * 1000,
+                    latitude=latitude,
+                    longitude=longitude,
+                    horizontal_accuracy_m=None,
+                    source_manifest_index=0,
+                    source_file_row_number=row_number,
+                    source_key=source_path.name,
+                    csv_row_number=row_number,
+                )
+            )
+    return finalize_source(
+        source_path, spec, source_sha256_before, source_bytes,
+        mutable_tracks, physical_locators, row_count,
+    )
+
+
+def finalize_source(
+    source_path: Path,
+    spec: SourceSpec,
+    source_sha256_before: str,
+    source_bytes: int,
+    mutable_tracks: Mapping[str, Sequence[PrivatePoint]],
+    physical_locators: set[tuple[int, int]],
+    row_count: int,
+) -> SourceModel:
     source_sha256_after = sha256_path(source_path)
     if source_sha256_after != source_sha256_before:
-        raise BuildError("Source CSV changed while it was being read; refusing to build")
+        raise BuildError("Source changed while it was being read; refusing to build")
     if row_count != spec.expected_row_count:
         raise BuildError(
             f"Expected {spec.expected_row_count:,} rows, found {row_count:,}"
@@ -598,7 +732,7 @@ def render_assets(model: DatasetModel) -> RenderedAssets:
             "notice": SIMULATION_NOTICE,
         },
         "source": {
-            "file": "multiple verified simulated CSV cohorts",
+            "file": "multiple verified simulated cohorts",
             "sha256": model.source_set_sha256,
             "row_count": model.row_count,
             "device_count": model.device_count,
@@ -650,6 +784,28 @@ def render_assets(model: DatasetModel) -> RenderedAssets:
             "The original 766 track bytes changed; "
             f"expected {LEGACY_TRACK_SET_SHA256}, got {legacy_track_set_sha256}"
         )
+
+    pre_test_2_verification: dict[str, object] = {}
+    if DELAWARE_COHORT_ID in source_by_cohort:
+        pre_test_2_people = people[:PRE_TEST_2_DEVICE_COUNT]
+        pre_test_2_people_sha256 = sha256_bytes(compact_json(pre_test_2_people))
+        if pre_test_2_people_sha256 != PRE_TEST_2_PEOPLE_METADATA_SHA256:
+            raise BuildError("The existing 814-person index order or metadata changed")
+        pre_test_2_files = {person["file"] for person in pre_test_2_people}
+        pre_test_2_lines = [
+            line for line in track_lines if line.split("\t", 1)[0] in pre_test_2_files
+        ]
+        pre_test_2_track_sha256 = sha256_bytes(
+            "".join(pre_test_2_lines).encode("utf-8")
+        )
+        if pre_test_2_track_sha256 != PRE_TEST_2_TRACK_SET_SHA256:
+            raise BuildError("The existing 814 track bytes changed")
+        pre_test_2_verification = {
+            "pre_test_2_people_metadata_sha256": pre_test_2_people_sha256,
+            "pre_test_2_people_metadata_unchanged": True,
+            "pre_test_2_track_set_sha256": pre_test_2_track_sha256,
+            "pre_test_2_track_bytes_unchanged": True,
+        }
 
     derived_lines = [f"index.json\t{index_sha256}\t{len(index_bytes)}\n"]
     derived_lines.extend(track_lines)
@@ -703,6 +859,7 @@ def render_assets(model: DatasetModel) -> RenderedAssets:
             "legacy_people_metadata_unchanged": True,
             "legacy_track_set_sha256": legacy_track_set_sha256,
             "legacy_track_bytes_unchanged": True,
+            **pre_test_2_verification,
         },
         "outputs": {
             "index": {
@@ -859,6 +1016,13 @@ def verify_asset_structure(
         raise BuildError("Legacy person metadata checksum changed")
     if verification["legacy_track_set_sha256"] != LEGACY_TRACK_SET_SHA256:
         raise BuildError("Legacy track-set checksum changed")
+    if DELAWARE_COHORT_ID in source_by_cohort:
+        if verification.get("pre_test_2_people_metadata_sha256") != (
+            PRE_TEST_2_PEOPLE_METADATA_SHA256
+        ):
+            raise BuildError("Existing 814-person metadata checksum changed")
+        if verification.get("pre_test_2_track_set_sha256") != PRE_TEST_2_TRACK_SET_SHA256:
+            raise BuildError("Existing 814 track-set checksum changed")
 
 
 def publish_assets(output_dir: Path, assets: RenderedAssets) -> None:
@@ -906,10 +1070,15 @@ def publish_assets(output_dir: Path, assets: RenderedAssets) -> None:
         track_dir.chmod(0o755)
 
 
-def load_dataset(source_path: Path, delaware_source_path: Path) -> DatasetModel:
+def load_dataset(
+    source_path: Path,
+    delaware_source_path: Path,
+    test_2_source_path: Path = DEFAULT_TEST_2_SOURCE,
+) -> DatasetModel:
     senate = load_source(source_path, SENATE_SOURCE_SPEC)
     delaware = load_source(delaware_source_path, DELAWARE_SOURCE_SPEC)
-    model = combine_sources((senate, delaware))
+    test_2 = load_source(test_2_source_path, TEST_2_SOURCE_SPEC)
+    model = combine_sources((senate, delaware, test_2))
     if model.row_count != EXPECTED_TOTAL_ROW_COUNT:
         raise BuildError(
             f"Expected {EXPECTED_TOTAL_ROW_COUNT:,} combined rows, "
@@ -928,13 +1097,16 @@ def build_or_verify(
     delaware_source_path: Path,
     output_dir: Path,
     verify_only: bool,
+    test_2_source_path: Path = DEFAULT_TEST_2_SOURCE,
 ) -> None:
-    model = load_dataset(source_path, delaware_source_path)
+    model = load_dataset(source_path, delaware_source_path, test_2_source_path)
     assets = render_assets(model)
     if not verify_only:
         publish_assets(output_dir, assets)
     verify_asset_structure(output_dir, model, assets)
-    for source, path in zip(model.sources, (source_path, delaware_source_path)):
+    for source, path in zip(
+        model.sources, (source_path, delaware_source_path, test_2_source_path)
+    ):
         if sha256_path(path) != source.source_sha256:
             raise BuildError(f"Immutable source changed during the build: {path}")
 
@@ -987,6 +1159,12 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
         help="Immutable completed Delaware-test full-path PrecisionGeo CSV",
     )
     parser.add_argument(
+        "--test-2-source",
+        type=Path,
+        default=DEFAULT_TEST_2_SOURCE,
+        help="Immutable fully artificial Test 2 PIN observations gzip TSV",
+    )
+    parser.add_argument(
         "--output",
         type=Path,
         default=DEFAULT_OUTPUT,
@@ -1006,6 +1184,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         build_or_verify(
             source_path=args.source.resolve(),
             delaware_source_path=args.delaware_source.resolve(),
+            test_2_source_path=args.test_2_source.resolve(),
             output_dir=args.output.resolve(),
             verify_only=args.verify_only,
         )

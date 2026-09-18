@@ -10,7 +10,7 @@ test("static export contains the Traceframe application shell", async () => {
   assert.match(html, /Traceframe/);
   assert.match(html, /Simulated data/i);
   assert.match(html, /Training exercise/i);
-  assert.match(html, /81,408 fictional mobility observations across 814 simulated tracks/i);
+  assert.match(html, /83,705 fictional mobility observations across 950 simulated tracks/i);
   assert.doesNotMatch(html, /codex-preview|SkeletonPreview|react-loading-skeleton/i);
 });
 
@@ -38,16 +38,18 @@ test("derived public data is complete and allowlisted", async () => {
   ]);
 
   assert.equal(index.simulation.is_simulated, true);
-  assert.equal(index.source.row_count, 81_408);
-  assert.equal(index.source.device_count, 814);
-  assert.equal(index.people.length, 814);
+  assert.equal(index.source.row_count, 83_705);
+  assert.equal(index.source.device_count, 950);
+  assert.equal(index.people.length, 950);
   assert.deepEqual(index.cohorts, [
     { id: "senate-test", label: "Senate test", row_count: 71_138, device_count: 766, source_index: 0 },
     { id: "delaware-test", label: "Delaware test", row_count: 10_270, device_count: 48, source_index: 1 },
+    { id: "test-2", label: "Test 2", row_count: 2_297, device_count: 136, source_index: 2 },
   ]);
   assert.equal(index.people.filter((person) => person.cohort_id === "senate-test").length, 766);
   assert.equal(index.people.filter((person) => person.cohort_id === "delaware-test").length, 48);
-  assert.equal(trackFiles.filter((name) => name.endsWith(".json")).length, 814);
+  assert.equal(index.people.filter((person) => person.cohort_id === "test-2").length, 136);
+  assert.equal(trackFiles.filter((name) => name.endsWith(".json")).length, 950);
   assert.deepEqual(index.fields, [
     "timestamp_ms",
     "latitude",
@@ -76,6 +78,27 @@ test("derived public data is complete and allowlisted", async () => {
     ]);
     assert.doesNotMatch(JSON.stringify(track), forbidden);
   }
+});
+
+test("Test 2 carries all PIN observations with unreported accuracy", async () => {
+  const index = JSON.parse(await readFile(new URL("../public/data/index.json", import.meta.url), "utf8"));
+  const people = index.people.filter((person) => person.cohort_id === "test-2");
+  let pointCount = 0;
+  for (const person of people) {
+    const track = JSON.parse(await readFile(new URL(`../public/data/${person.file}`, import.meta.url), "utf8"));
+    assert.equal(track.person.id, person.id);
+    assert.equal(track.points.length, person.point_count);
+    assert.equal(track.points[0][0], person.start_ms);
+    assert.equal(track.points.at(-1)[0], person.end_ms);
+    for (const point of track.points) {
+      assert.equal(point.length, 4);
+      assert.equal(point[3], null);
+      assert.ok(point[0] >= Date.UTC(2026, 7, 23) && point[0] < Date.UTC(2026, 8, 2));
+    }
+    pointCount += track.points.length;
+  }
+  assert.equal(people.length, 136);
+  assert.equal(pointCount, 2_297);
 });
 
 test("production export carries every derived asset", async () => {

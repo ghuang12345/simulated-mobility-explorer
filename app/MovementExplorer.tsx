@@ -505,16 +505,24 @@ export default function MovementExplorer() {
         setIndex(nextIndex);
         setIndexUrl(dataUrl.toString());
         const query = new URL(window.location.href).searchParams;
+        const requestedCohort = query.get("cohort") ?? "all";
+        const initialCohort = nextIndex.cohorts.some(
+          (cohort) => cohort.id === requestedCohort,
+        ) ? requestedCohort : "all";
+        setCohortFilter(initialCohort);
+        const availablePeople = initialCohort === "all"
+          ? nextIndex.people
+          : nextIndex.people.filter((person) => person.cohort_id === initialCohort);
         const requestedPerson = query.get("person") ?? "";
         const requestedTimeParameter = query.get("t");
         const requestedTime =
           requestedTimeParameter === null ? Number.NaN : Number(requestedTimeParameter);
         const matchedPerson =
-          nextIndex.people.find(
+          availablePeople.find(
             (person) =>
               person.slug === requestedPerson ||
               person.id.toLocaleLowerCase() === requestedPerson.toLocaleLowerCase(),
-          ) ?? nextIndex.people[0];
+          ) ?? availablePeople[0];
 
         if (matchedPerson) {
           pendingDeepLinkRef.current = {
@@ -599,10 +607,15 @@ export default function MovementExplorer() {
   useEffect(() => {
     if (!track || !selectedSlug || !track.frames[frameIndex]) return;
     const url = new URL(window.location.href);
+    if (cohortFilter === "all") {
+      url.searchParams.delete("cohort");
+    } else {
+      url.searchParams.set("cohort", cohortFilter);
+    }
     url.searchParams.set("person", selectedSlug);
     url.searchParams.set("t", String(track.frames[frameIndex].timestampMs));
     window.history.replaceState(null, "", url);
-  }, [frameIndex, selectedSlug, track]);
+  }, [cohortFilter, frameIndex, selectedSlug, track]);
 
   useEffect(() => {
     let cancelled = false;
@@ -886,6 +899,7 @@ export default function MovementExplorer() {
 
   const chooseCohort = (cohortId: string) => {
     setCohortFilter(cohortId);
+    setSearchTerm("");
     if (cohortId === "all" || selectedPerson?.cohort_id === cohortId) return;
     const firstPersonInCohort = people.find((person) => person.cohort_id === cohortId);
     if (firstPersonInCohort) choosePerson(firstPersonInCohort.slug);
@@ -972,7 +986,7 @@ export default function MovementExplorer() {
                 ))}
               </select>
 
-              <label htmlFor="person-search">Search alias, cohort, or simulated IFA</label>
+              <label htmlFor="person-search">Search alias, cohort, or simulated ID</label>
               <input
                 id="person-search"
                 className="search-input"
