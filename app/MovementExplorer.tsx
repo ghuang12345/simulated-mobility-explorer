@@ -464,6 +464,10 @@ export default function MovementExplorer() {
   );
   const emptyTest2 = cohortFilter === "test-2" &&
     index?.cohorts.some((cohort) => cohort.id === "test-2" && cohort.device_count === 0);
+  const showDcSenateContext = cohortFilter === "dc-senate" ||
+    selectedPerson?.cohort_id === "dc-senate";
+  const emptyDcSenate = cohortFilter === "dc-senate" &&
+    index?.cohorts.some((cohort) => cohort.id === "dc-senate" && cohort.device_count === 0);
 
   const filteredPeople = useMemo(() => {
     const query = searchTerm.trim().toLocaleLowerCase();
@@ -1176,6 +1180,14 @@ export default function MovementExplorer() {
           </aside>
 
           <section className="map-and-details" aria-label="Movement map and observation details">
+            {showDcSenateContext ? (
+              <aside className="cohort-context" aria-label="DC Senate selection method">
+                <p><strong>DC Senate</strong> · Selected by recorded PIN points within the Russell,
+                  Dirksen/Hart, or northern Capitol building footprints, with no buffer.</p>
+                <p>Shows all available observations for each matching simulated track.
+                  PIN reports no location accuracy; a point within a footprint does not confirm physical entry.</p>
+              </aside>
+            ) : null}
             <div className="map-frame">
               <div
                 ref={mapElementRef}
@@ -1196,6 +1208,8 @@ export default function MovementExplorer() {
                       <p><strong>No Senate-area observations in Test 2.</strong></p>
                       <p>All 66,710,407 PIN observations were checked. None falls within 250 metres of the Senate-area building footprints.</p>
                     </>
+                  ) : emptyDcSenate ? (
+                    <p>No recorded PIN points fall within the selected Senate building footprints.</p>
                   ) : (
                     <p>Select a simulated person to inspect their movement trace.</p>
                   )}

@@ -1,0 +1,153 @@
+{
+  "geometry": {
+    "boundary_rule": "Polygon covers: exterior and hole boundaries included, hole interiors excluded; no distance buffer.",
+    "buffer_meters": 0,
+    "capitol_rule": "Latitude >= midpoint of the full Capitol footprint north/south bounds; approximate Senate northern half.",
+    "filename": "official_senate_footprints.geojson",
+    "sha256": "7181f28ced1fdcfe1b7498adbd38d699bd500d1e0e19a3253ad9de6c303b0fe9",
+    "source_retrieved_at_utc": "2026-08-26T03:59:34.559506+00:00",
+    "source_url": "https://maps2.dcgis.dc.gov/dcgis/rest/services/DCGIS_DATA/Facility_and_Structure/MapServer/1/query?where=OBJECTID+IN+%2886912%2C87510%2C87509%29&outFields=OBJECTID%2CDESCRIPTION%2CCAPTUREYEAR&returnGeometry=true&outSR=4326&f=geojson",
+    "targets": [
+      {
+        "bounds": [
+          -77.00957398932856,
+          38.88981587704386,
+          -77.00856397005337,
+          38.8908471190461
+        ],
+        "latitude_cutoff": 38.88981587704386,
+        "name": "U.S. Capitol Senate north wing",
+        "object_id": 86912,
+        "qualifying_ids": 147,
+        "qualifying_rows": 1340
+      },
+      {
+        "bounds": [
+          -77.00570585325839,
+          38.89221925540241,
+          -77.00378820302367,
+          38.89348864506621
+        ],
+        "latitude_cutoff": null,
+        "name": "Dirksen and Hart Senate Office Buildings",
+        "object_id": 87509,
+        "qualifying_ids": 252,
+        "qualifying_rows": 2591
+      },
+      {
+        "bounds": [
+          -77.00777407275393,
+          38.892227697439296,
+          -77.0060620333872,
+          38.89349457000738
+        ],
+        "latitude_cutoff": null,
+        "name": "Russell Senate Office Building",
+        "object_id": 87510,
+        "qualifying_ids": 161,
+        "qualifying_rows": 737
+      }
+    ]
+  },
+  "limitations": [
+    "Simulated identifiers are not identified people.",
+    "Coordinates inside a footprint do not prove physical entry.",
+    "No horizontal accuracy field is available in the PIN report.",
+    "Only observations supplied in this report are mapped; missing observations cannot be reconstructed.",
+    "Capitol northern half is a geometric approximation, not a room-level Senate boundary."
+  ],
+  "outputs": {
+    "pin_observations.tsv.gz": {
+      "bytes": 1687623,
+      "sha256": "48cabcd081df333522fa6b53fc4c36fed098a059163ca2893ce531f074e44473"
+    },
+    "qualifying_observations.tsv.gz": {
+      "bytes": 112237,
+      "sha256": "293b1a8c9317f1f8ba32ff1ab792e0aef99c242d41bf51bfcd04542295926250"
+    }
+  },
+  "schema_version": 1,
+  "selection": {
+    "all_observations_for_qualified_ids": {
+      "bounds": {
+        "east": -76.9112158,
+        "north": 38.98707,
+        "south": 38.81,
+        "west": -77.1159394
+      },
+      "date_range_utc": [
+        "2026-09-01T00:00:12+00:00",
+        "2026-09-08T23:59:56+00:00"
+      ],
+      "row_count": 76787,
+      "unix_timestamp_range": [
+        1788220812,
+        1788911996
+      ]
+    },
+    "qualified_id_count": 503,
+    "qualifying_observations": {
+      "bounds": {
+        "east": -77.00379,
+        "north": 38.89349,
+        "south": 38.8898162,
+        "west": -77.00957
+      },
+      "date_range_utc": [
+        "2026-09-01T00:02:01+00:00",
+        "2026-09-08T23:37:17+00:00"
+      ],
+      "row_count": 4668,
+      "unix_timestamp_range": [
+        1788220921,
+        1788910637
+      ]
+    }
+  },
+  "simulation": "User explicitly confirmed that this dataset is simulated.",
+  "source": {
+    "bounds": {
+      "east": -76.90954,
+      "north": 38.99556,
+      "south": 38.7923758,
+      "west": -77.11755
+    },
+    "bytes": 1185124882,
+    "date_range_utc": [
+      "2026-09-01T00:00:00+00:00",
+      "2026-09-08T23:59:59+00:00"
+    ],
+    "filename": "10173323_Washington_DC_sample_1_week_pin_report.tsv.gz",
+    "local_date_counts": {
+      "2026-08-31": 878632,
+      "2026-09-01": 3696113,
+      "2026-09-02": 3086579,
+      "2026-09-03": 3429733,
+      "2026-09-04": 3456282,
+      "2026-09-05": 3329991,
+      "2026-09-06": 3487139,
+      "2026-09-07": 3715900,
+      "2026-09-08": 2966965
+    },
+    "polygon_id_counts": {
+      "1": 28047334
+    },
+    "row_count": 28047334,
+    "sha256": "403b1e970e77073b0d82123f764d17b79013f0f7a0ba3fd04083d3bf6268f09d",
+    "time_zone_counts": {
+      "America/New_York": 28047334
+    },
+    "unix_timestamp_range": [
+      1788220800,
+      1788911999
+    ]
+  },
+  "validation": {
+    "accuracy_field_available": false,
+    "duplicates_preserved": true,
+    "raw_selected_fields_and_order_preserved": true,
+    "selected_rows_local_date_time_weekday_timezone_checked": true,
+    "source_numeric_coordinates_timestamps_ids_and_field_counts_checked": true,
+    "source_rows_pass2": 28047334
+  }
+}

@@ -50,9 +50,17 @@ TEST_2_SOURCE_SHA256 = (
 )
 TEST_2_ROW_COUNT = 0
 TEST_2_DEVICE_COUNT = 0
-EXPECTED_TOTAL_ROW_COUNT = SENATE_ROW_COUNT + DELAWARE_ROW_COUNT + TEST_2_ROW_COUNT
+DC_SENATE_COHORT_ID = "dc-senate"
+DC_SENATE_COHORT_LABEL = "DC Senate"
+DC_SENATE_SOURCE_SHA256 = "48cabcd081df333522fa6b53fc4c36fed098a059163ca2893ce531f074e44473"
+DC_SENATE_ROW_COUNT = 76_787
+DC_SENATE_DEVICE_COUNT = 503
+EXPECTED_TOTAL_ROW_COUNT = (
+    SENATE_ROW_COUNT + DELAWARE_ROW_COUNT + TEST_2_ROW_COUNT + DC_SENATE_ROW_COUNT
+)
 EXPECTED_TOTAL_DEVICE_COUNT = (
     SENATE_DEVICE_COUNT + DELAWARE_DEVICE_COUNT + TEST_2_DEVICE_COUNT
+    + DC_SENATE_DEVICE_COUNT
 )
 PRE_TEST_2_DEVICE_COUNT = SENATE_DEVICE_COUNT + DELAWARE_DEVICE_COUNT
 PRE_TEST_2_PEOPLE_METADATA_SHA256 = (
@@ -107,24 +115,26 @@ FORBIDDEN_PUBLIC_KEYS = {
 }
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+SOURCE_ROOT = Path(os.environ.get("TRACEFRAME_SOURCE_ROOT", REPOSITORY_ROOT.parent))
 DEFAULT_SOURCE = (
-    REPOSITORY_ROOT.parent
+    SOURCE_ROOT
     / "output"
     / "pathiq_senate_cohort_full_precisiongeo"
     / "precisiongeo_cohort_rows.csv"
 )
 DEFAULT_DELAWARE_SOURCE = (
-    REPOSITORY_ROOT.parent
+    SOURCE_ROOT
     / "output"
     / "pathiq_point_cohort_full_precisiongeo"
     / "point_cohort_full_paths.csv"
 )
 DEFAULT_TEST_2_SOURCE = (
-    REPOSITORY_ROOT.parent
+    SOURCE_ROOT
     / "outputs"
     / "simulated_pin_senate_250m"
     / "pin_observations.tsv.gz"
 )
+DEFAULT_DC_SENATE_SOURCE = REPOSITORY_ROOT / "outputs" / "dc-senate" / "pin_observations.tsv.gz"
 DEFAULT_OUTPUT = REPOSITORY_ROOT / "public" / "data"
 
 
@@ -163,6 +173,15 @@ TEST_2_SOURCE_SPEC = SourceSpec(
     expected_sha256=TEST_2_SOURCE_SHA256,
     expected_row_count=TEST_2_ROW_COUNT,
     expected_device_count=TEST_2_DEVICE_COUNT,
+    source_format="pin-tsv-gz",
+)
+
+DC_SENATE_SOURCE_SPEC = SourceSpec(
+    cohort_id=DC_SENATE_COHORT_ID,
+    cohort_label=DC_SENATE_COHORT_LABEL,
+    expected_sha256=DC_SENATE_SOURCE_SHA256,
+    expected_row_count=DC_SENATE_ROW_COUNT,
+    expected_device_count=DC_SENATE_DEVICE_COUNT,
     source_format="pin-tsv-gz",
 )
 
@@ -1074,11 +1093,13 @@ def load_dataset(
     source_path: Path,
     delaware_source_path: Path,
     test_2_source_path: Path = DEFAULT_TEST_2_SOURCE,
+    dc_senate_source_path: Path = DEFAULT_DC_SENATE_SOURCE,
 ) -> DatasetModel:
     senate = load_source(source_path, SENATE_SOURCE_SPEC)
     delaware = load_source(delaware_source_path, DELAWARE_SOURCE_SPEC)
     test_2 = load_source(test_2_source_path, TEST_2_SOURCE_SPEC)
-    model = combine_sources((senate, delaware, test_2))
+    dc_senate = load_source(dc_senate_source_path, DC_SENATE_SOURCE_SPEC)
+    model = combine_sources((senate, delaware, test_2, dc_senate))
     if model.row_count != EXPECTED_TOTAL_ROW_COUNT:
         raise BuildError(
             f"Expected {EXPECTED_TOTAL_ROW_COUNT:,} combined rows, "
@@ -1098,14 +1119,18 @@ def build_or_verify(
     output_dir: Path,
     verify_only: bool,
     test_2_source_path: Path = DEFAULT_TEST_2_SOURCE,
+    dc_senate_source_path: Path = DEFAULT_DC_SENATE_SOURCE,
 ) -> None:
-    model = load_dataset(source_path, delaware_source_path, test_2_source_path)
+    model = load_dataset(
+        source_path, delaware_source_path, test_2_source_path, dc_senate_source_path
+    )
     assets = render_assets(model)
     if not verify_only:
         publish_assets(output_dir, assets)
     verify_asset_structure(output_dir, model, assets)
     for source, path in zip(
-        model.sources, (source_path, delaware_source_path, test_2_source_path)
+        model.sources,
+        (source_path, delaware_source_path, test_2_source_path, dc_senate_source_path),
     ):
         if sha256_path(path) != source.source_sha256:
             raise BuildError(f"Immutable source changed during the build: {path}")
@@ -1165,6 +1190,12 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
         help="Immutable fully artificial Test 2 PIN observations gzip TSV",
     )
     parser.add_argument(
+        "--dc-senate-source",
+        type=Path,
+        default=DEFAULT_DC_SENATE_SOURCE,
+        help="Immutable simulated DC PIN tracks selected by Senate building footprints",
+    )
+    parser.add_argument(
         "--output",
         type=Path,
         default=DEFAULT_OUTPUT,
@@ -1185,6 +1216,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             source_path=args.source.resolve(),
             delaware_source_path=args.delaware_source.resolve(),
             test_2_source_path=args.test_2_source.resolve(),
+            dc_senate_source_path=args.dc_senate_source.resolve(),
             output_dir=args.output.resolve(),
             verify_only=args.verify_only,
         )

@@ -24,6 +24,7 @@ class MovementDataBuilderTests(unittest.TestCase):
         cls.senate_sha_before = build.sha256_path(build.DEFAULT_SOURCE)
         cls.delaware_sha_before = build.sha256_path(build.DEFAULT_DELAWARE_SOURCE)
         cls.test_2_sha_before = build.sha256_path(build.DEFAULT_TEST_2_SOURCE)
+        cls.dc_senate_sha_before = build.sha256_path(build.DEFAULT_DC_SENATE_SOURCE)
         cls.senate = build.load_source(
             build.DEFAULT_SOURCE, build.SENATE_SOURCE_SPEC
         )
@@ -33,19 +34,23 @@ class MovementDataBuilderTests(unittest.TestCase):
         cls.test_2 = build.load_source(
             build.DEFAULT_TEST_2_SOURCE, build.TEST_2_SOURCE_SPEC
         )
+        cls.dc_senate = build.load_source(
+            build.DEFAULT_DC_SENATE_SOURCE, build.DC_SENATE_SOURCE_SPEC
+        )
         cls.primary_model = build.combine_sources((cls.senate,))
         cls.pre_test_2_model = build.combine_sources((cls.senate, cls.delaware))
-        cls.model = build.combine_sources((cls.senate, cls.delaware, cls.test_2))
+        cls.model = build.combine_sources((cls.senate, cls.delaware, cls.test_2, cls.dc_senate))
         cls.primary_assets = build.render_assets(cls.primary_model)
         cls.pre_test_2_assets = build.render_assets(cls.pre_test_2_model)
         cls.assets = build.render_assets(cls.model)
         cls.index = json.loads(cls.assets.index_bytes)
         cls.summary = json.loads(cls.assets.summary_bytes)
 
-    def test_three_pinned_sources_are_immutable_and_complete(self) -> None:
+    def test_four_pinned_sources_are_immutable_and_complete(self) -> None:
         self.assertEqual(self.senate_sha_before, build.SENATE_SOURCE_SHA256)
         self.assertEqual(self.delaware_sha_before, build.DELAWARE_SOURCE_SHA256)
         self.assertEqual(self.test_2_sha_before, build.TEST_2_SOURCE_SHA256)
+        self.assertEqual(self.dc_senate_sha_before, build.DC_SENATE_SOURCE_SHA256)
         self.assertEqual(
             build.sha256_path(build.DEFAULT_SOURCE), self.senate_sha_before
         )
@@ -56,9 +61,10 @@ class MovementDataBuilderTests(unittest.TestCase):
         self.assertEqual(
             build.sha256_path(build.DEFAULT_TEST_2_SOURCE), self.test_2_sha_before
         )
-        self.assertEqual(self.model.row_count, 81_408)
-        self.assertEqual(self.model.device_count, 814)
-        self.assertEqual(len(self.model.tracks), 814)
+        self.assertEqual(build.sha256_path(build.DEFAULT_DC_SENATE_SOURCE), self.dc_senate_sha_before)
+        self.assertEqual(self.model.row_count, 81_408 + build.DC_SENATE_ROW_COUNT)
+        self.assertEqual(self.model.device_count, 814 + build.DC_SENATE_DEVICE_COUNT)
+        self.assertEqual(len(self.model.tracks), build.EXPECTED_TOTAL_DEVICE_COUNT)
 
     def test_cohort_contract_and_append_only_alias_order(self) -> None:
         self.assertEqual(
@@ -85,17 +91,24 @@ class MovementDataBuilderTests(unittest.TestCase):
                     "device_count": 0,
                     "source_index": 2,
                 },
+                {
+                    "id": "dc-senate",
+                    "label": "DC Senate",
+                    "row_count": build.DC_SENATE_ROW_COUNT,
+                    "device_count": build.DC_SENATE_DEVICE_COUNT,
+                    "source_index": 3,
+                },
             ],
         )
         people = self.index["people"]
-        self.assertEqual(len(people), 814)
+        self.assertEqual(len(people), build.EXPECTED_TOTAL_DEVICE_COUNT)
         self.assertTrue(
             all(person["cohort"] == "Senate test" for person in people[:766])
         )
         self.assertTrue(
             all(person["cohort"] == "Delaware test" for person in people[766:814])
         )
-        self.assertTrue(all(person["cohort"] == "Test 2" for person in people[814:]))
+        self.assertTrue(all(person["cohort"] == "DC Senate" for person in people[814:]))
         self.assertEqual(
             [person["id"] for person in people[:766]],
             list(self.primary_model.person_order),
@@ -105,7 +118,7 @@ class MovementDataBuilderTests(unittest.TestCase):
             sorted(self.delaware.tracks),
         )
         self.assertEqual(
-            [person["id"] for person in people[814:]], sorted(self.test_2.tracks)
+            [person["id"] for person in people[814:]], sorted(self.dc_senate.tracks)
         )
         self.assertEqual(
             people[:814], json.loads(self.pre_test_2_assets.index_bytes)["people"]
@@ -137,9 +150,9 @@ class MovementDataBuilderTests(unittest.TestCase):
 
     def test_ids_slugs_and_public_schema_are_safe(self) -> None:
         people = self.index["people"]
-        self.assertEqual(len({person["id"] for person in people}), 814)
-        self.assertEqual(len({person["slug"] for person in people}), 814)
-        self.assertEqual(len({person["file"] for person in people}), 814)
+        self.assertEqual(len({person["id"] for person in people}), build.EXPECTED_TOTAL_DEVICE_COUNT)
+        self.assertEqual(len({person["slug"] for person in people}), build.EXPECTED_TOTAL_DEVICE_COUNT)
+        self.assertEqual(len({person["file"] for person in people}), build.EXPECTED_TOTAL_DEVICE_COUNT)
         self.assertEqual(
             self.summary["verification"]["device_id_collision_count"], 0
         )
@@ -176,30 +189,24 @@ class MovementDataBuilderTests(unittest.TestCase):
     def test_expected_derived_file_set_has_no_slug_collision(self) -> None:
         files = sorted(self.assets.track_bytes)
         digest = hashlib.sha256("\n".join(files).encode("utf-8")).hexdigest()
-        self.assertEqual(len(files), 814)
-        self.assertEqual(len(set(files)), 814)
+        self.assertEqual(len(files), build.EXPECTED_TOTAL_DEVICE_COUNT)
+        self.assertEqual(len(set(files)), build.EXPECTED_TOTAL_DEVICE_COUNT)
         self.assertEqual(len(digest), 64)
 
     def test_pin_rows_reconcile_without_deduplication_or_invented_accuracy(self) -> None:
-        with gzip.open(build.DEFAULT_TEST_2_SOURCE, "rt", newline="") as handle:
-            rows = list(csv.DictReader(handle, delimiter="\t"))
-        expected = Counter(
-            (
-                row["Hashed Device ID"],
-                int(row["Unix Timestamp of Visit"]) * 1000,
-                float(row["Lat of Visit"]),
-                float(row["Lon of Visit"]),
-                None,
-            )
-            for row in rows
-        )
+        expected = Counter()
+        with gzip.open(build.DEFAULT_DC_SENATE_SOURCE, "rt", newline="") as handle:
+            for row in csv.DictReader(handle, delimiter="\t"):
+                expected[(row["Hashed Device ID"], int(row["Unix Timestamp of Visit"]) * 1000,
+                          float(row["Lat of Visit"]), float(row["Lon of Visit"]), None)] += 1
         actual = Counter(
             (person_id, *point.public_values)
-            for person_id, points in self.test_2.tracks.items()
+            for person_id, points in self.dc_senate.tracks.items()
             for point in points
         )
         self.assertEqual(actual, expected)
-        self.assertEqual(sum(actual.values()), 0)
+        self.assertEqual(sum(actual.values()), build.DC_SENATE_ROW_COUNT)
+        self.assertEqual(len(self.dc_senate.tracks), build.DC_SENATE_DEVICE_COUNT)
         self.assertEqual(len(self.test_2.tracks), 0)
         for person in self.index["people"][814:]:
             track = json.loads(self.assets.track_bytes[person["file"]])

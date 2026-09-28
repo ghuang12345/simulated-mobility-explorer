@@ -393,6 +393,20 @@ code { font-family: var(--mono); }
   background: #0b0f0d;
 }
 
+.cohort-context {
+  padding: 11px 14px;
+  border: 1px solid var(--line-bright);
+  border-radius: 9px;
+  background: #141d18;
+  color: #b9c9bf;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.cohort-context p { margin: 0; }
+.cohort-context p + p { margin-top: 4px; }
+.cohort-context strong { color: var(--mint); }
+
 .map-frame {
   position: relative;
   min-width: 0;

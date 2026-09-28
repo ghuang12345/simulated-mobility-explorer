@@ -21,9 +21,21 @@ The source checksum is pinned in `public/data/manifest-summary.json`. The determ
 
 - **Senate test:** 766 simulated tracks and 71,138 observations.
 - **Delaware test:** 48 simulated tracks and 10,270 observations.
+- **DC Senate:** 503 simulated tracks and 76,787 observations. All 28,047,334 records in the supplied Washington DC PIN report were scanned. A track qualifies when at least one actual visit coordinate is covered by the official Russell or combined Dirksen/Hart footprint, or the northern half of the Capitol footprint. There is **no distance buffer**, and courtyard interiors are excluded. There are 4,668 qualifying observations: 737 at Russell, 2,591 at Dirksen/Hart, and 1,340 in the Capitol's northern half. All available observations for qualifying IDs are retained, including duplicates and points outside the footprints. The supplied report spans September 1–8, 2026 UTC (August 31–September 8 in Washington local time). PIN reports no accuracy; footprint matches do not establish physical entry, and the Capitol split is a geometric approximation.
 - **Test 2:** No qualifying tracks or observations. All 66,710,407 observations across the nine parts of the supplied Virginia PIN sample were scanned directly using the original Senate test's 250-metre buffer around Russell, combined Dirksen/Hart, and the northern half of the Capitol. None qualified. Every supplied PIN latitude is at or south of 38.07 degrees; the Senate-area footprints are around 38.89 degrees. The source note describes fully artificially generated synthetic data. This replaces the earlier, incorrect 136-ID selection based on CDL common daytime locations. The CDL and PIN IDs matched literally, but those inferred daytime locations did not establish Senate-area PIN observations.
 
 Select **Test 2** in the Cohort menu, or open [Test 2 directly](https://ghuang12345.github.io/simulated-mobility-explorer/?cohort=test-2). The existing cohorts retain their track identifiers, ordering and observations.
+
+Select **DC Senate** in the Cohort menu, or [open DC Senate directly](https://ghuang12345.github.io/simulated-mobility-explorer/?cohort=dc-senate). The full site now contains 1,317 tracks and 158,195 observations. The DC data was explicitly confirmed by the user to be simulated.
+
+The DC extraction manifest in `scripts/data/dc-senate-extraction.json` records source and output checksums, exact counts, date coverage, and the cached official geometry's provenance. Reproduce the cohort with the source report kept outside the repository:
+
+```bash
+python3 scripts/extract_dc_senate.py /path/to/10173323_Washington_DC_sample_1_week_pin_report.tsv.gz
+python3 scripts/build_movement_data.py
+```
+
+The extractor streams the report twice without expanding it onto disk: first to select IDs from visit coordinates, then to retain their complete supplied tracks. It does not use CEL/CDL usual locations to infer visits. Set `TRACEFRAME_SOURCE_ROOT` to the directory containing the legacy `output/` and `outputs/` folders when building from a separate checkout, or pass the explicit source flags. The new DC source defaults to `outputs/dc-senate/pin_observations.tsv.gz` within this repository and remains untracked.
 
 ## Local development
 

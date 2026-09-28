@@ -10,7 +10,7 @@ test("static export contains the Traceframe application shell", async () => {
   assert.match(html, /Traceframe/);
   assert.match(html, /Simulated data/i);
   assert.match(html, /Training exercise/i);
-  assert.match(html, /81,408 fictional mobility observations across 814 simulated tracks/i);
+  assert.match(html, /simulated (?:mobility|movement)/i);
   assert.doesNotMatch(html, /codex-preview|SkeletonPreview|react-loading-skeleton/i);
 });
 
@@ -38,18 +38,24 @@ test("derived public data is complete and allowlisted", async () => {
   ]);
 
   assert.equal(index.simulation.is_simulated, true);
-  assert.equal(index.source.row_count, 81_408);
-  assert.equal(index.source.device_count, 814);
-  assert.equal(index.people.length, 814);
-  assert.deepEqual(index.cohorts, [
+  assert.equal(index.source.row_count, index.cohorts.reduce((count, cohort) => count + cohort.row_count, 0));
+  assert.equal(index.source.device_count, index.cohorts.reduce((count, cohort) => count + cohort.device_count, 0));
+  assert.equal(index.people.length, index.source.device_count);
+  assert.deepEqual(index.cohorts.slice(0, 3), [
     { id: "senate-test", label: "Senate test", row_count: 71_138, device_count: 766, source_index: 0 },
     { id: "delaware-test", label: "Delaware test", row_count: 10_270, device_count: 48, source_index: 1 },
     { id: "test-2", label: "Test 2", row_count: 0, device_count: 0, source_index: 2 },
   ]);
+  assert.equal(index.cohorts.length, 4);
+  const dcSenate = index.cohorts[3];
+  assert.equal(dcSenate.id, "dc-senate");
+  assert.equal(dcSenate.label, "DC Senate");
+  assert.equal(dcSenate.source_index, 3);
   assert.equal(index.people.filter((person) => person.cohort_id === "senate-test").length, 766);
   assert.equal(index.people.filter((person) => person.cohort_id === "delaware-test").length, 48);
   assert.equal(index.people.filter((person) => person.cohort_id === "test-2").length, 0);
-  assert.equal(trackFiles.filter((name) => name.endsWith(".json")).length, 814);
+  assert.equal(index.people.filter((person) => person.cohort_id === "dc-senate").length, dcSenate.device_count);
+  assert.equal(trackFiles.filter((name) => name.endsWith(".json")).length, index.source.device_count);
   assert.deepEqual(index.fields, [
     "timestamp_ms",
     "latitude",
@@ -66,8 +72,15 @@ test("derived public data is complete and allowlisted", async () => {
   assert.doesNotMatch(JSON.stringify(index), forbidden);
   assert.doesNotMatch(JSON.stringify(summary), forbidden);
 
+  const peopleByFile = new Map(index.people.map((person) => [person.file, person]));
+  const pointsByCohort = new Map(index.cohorts.map((cohort) => [cohort.id, 0]));
   for (const filename of trackFiles.filter((name) => name.endsWith(".json"))) {
     const track = JSON.parse(await readFile(new URL(`../public/data/tracks/${filename}`, import.meta.url), "utf8"));
+    const person = peopleByFile.get(`tracks/${filename}`);
+    assert.ok(person, `Track ${filename} must appear in the index`);
+    assert.equal(track.person.id, person.id);
+    assert.equal(track.points.length, person.point_count);
+    pointsByCohort.set(person.cohort_id, pointsByCohort.get(person.cohort_id) + track.points.length);
     assert.deepEqual(Object.keys(track).sort(), ["fields", "person", "points", "simulation", "v"]);
     assert.deepEqual(Object.keys(track.person).sort(), ["id", "slug"]);
     assert.deepEqual(track.fields, [
@@ -77,6 +90,19 @@ test("derived public data is complete and allowlisted", async () => {
       "horizontal_accuracy_m",
     ]);
     assert.doesNotMatch(JSON.stringify(track), forbidden);
+    if (person.cohort_id === "dc-senate") {
+      assert.equal(track.points[0][0], person.start_ms);
+      assert.equal(track.points.at(-1)[0], person.end_ms);
+      for (const [pointIndex, point] of track.points.entries()) {
+        assert.equal(point.length, 4);
+        assert.equal(point[3], null, "PIN does not report horizontal accuracy");
+        assert.equal(point[0] % 1000, 0, "PIN timestamps preserve epoch seconds");
+        if (pointIndex) assert.ok(point[0] >= track.points[pointIndex - 1][0]);
+      }
+    }
+  }
+  for (const cohort of index.cohorts) {
+    assert.equal(pointsByCohort.get(cohort.id), cohort.row_count);
   }
 });
 
