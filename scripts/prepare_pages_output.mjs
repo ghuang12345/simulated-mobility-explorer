@@ -62,6 +62,12 @@ assert.equal(summaryPayload.verification.private_values_published, false);
 assert.equal(summaryPayload.verification.legacy_people_metadata_unchanged, true);
 assert.equal(summaryPayload.verification.legacy_track_bytes_unchanged, true);
 
+const [sourceCel, stagedCel] = await Promise.all([
+  readFile(path.join(projectRoot, "public", "data", "dc-senate-cel.json"), "utf8"),
+  readFile(path.join(pagesRoot, "data", "dc-senate-cel.json"), "utf8"),
+]);
+assert.equal(stagedCel, sourceCel, "Pages must preserve the separate simulated CEL asset");
+
 const forbiddenPublicText = /ip_address|source_s3_uri|source_key|source_manifest_index|source_partition|source_file_row_number|source_size_bytes|source_etag|source_last_modified|consent/;
 assert.doesNotMatch(JSON.stringify(indexPayload), forbiddenPublicText);
 assert.doesNotMatch(JSON.stringify(summaryPayload), forbiddenPublicText);

@@ -89,8 +89,24 @@ type PersonOption = PersonSummary & {
   alias: string;
 };
 
+type EveningLocation = {
+  latitude: number;
+  longitude: number;
+  county: string;
+  state: string;
+  postal: string;
+  country: string;
+};
+
+type EveningPerson = {
+  id: string;
+  slug: string;
+  locations: EveningLocation[];
+};
+
 type LeafletModule = typeof import("leaflet");
 
+const NO_EVENING_LOCATIONS: EveningLocation[] = [];
 const SIX_HOURS_MS = 6 * 60 * 60 * 1000;
 const SPEED_LIMIT_KMH = 300;
 const PLAYBACK_SPEEDS = [1, 6, 24] as const;
@@ -102,6 +118,39 @@ const BASELINE_COHORT = {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
+}
+
+function parseEveningLocations(value: unknown): EveningPerson[] {
+  if (!isRecord(value) || value.schema_version !== 1 || value.simulated !== true ||
+      !Array.isArray(value.people)) {
+    throw new Error("The evening location data is not in the supported format.");
+  }
+  return value.people.map((person) => {
+    if (!isRecord(person) || typeof person.id !== "string" || typeof person.slug !== "string" ||
+        !Array.isArray(person.locations) || person.locations.length !== 2) {
+      throw new Error("The evening location data contains an invalid pair.");
+    }
+    const locations = person.locations.map((location) => {
+      if (!isRecord(location) || typeof location.latitude !== "number" ||
+          !Number.isFinite(location.latitude) || Math.abs(location.latitude) > 90 ||
+          typeof location.longitude !== "number" || !Number.isFinite(location.longitude) ||
+          Math.abs(location.longitude) > 180 || typeof location.county !== "string" ||
+          typeof location.state !== "string" || typeof location.postal !== "string" ||
+          typeof location.country !== "string") {
+        throw new Error("An evening location has invalid coordinates or labels.");
+      }
+      return {
+        latitude: location.latitude, longitude: location.longitude,
+        county: location.county, state: location.state,
+        postal: location.postal, country: location.country,
+      };
+    });
+    return { id: person.id, slug: person.slug, locations };
+  });
+}
+
+function eveningArea(location: EveningLocation): string {
+  return [location.county, location.state, location.postal, location.country].filter(Boolean).join(" · ");
 }
 
 function isBoundingBox(value: unknown): value is BoundingBox {
@@ -423,6 +472,8 @@ export default function MovementExplorer() {
   const [index, setIndex] = useState<ExplorerIndex | null>(null);
   const [indexUrl, setIndexUrl] = useState("");
   const [indexError, setIndexError] = useState("");
+  const [eveningPeople, setEveningPeople] = useState<EveningPerson[]>([]);
+  const [eveningError, setEveningError] = useState("");
   const [selectedSlug, setSelectedSlug] = useState("");
   const [cohortFilter, setCohortFilter] = useState("all");
   const [searchTerm, setSearchTerm] = useState("");
@@ -445,6 +496,7 @@ export default function MovementExplorer() {
   const elapsedLayerRef = useRef<LayerGroup | null>(null);
   const pointsLayerRef = useRef<LayerGroup | null>(null);
   const focusLayerRef = useRef<LayerGroup | null>(null);
+  const eveningLayerRef = useRef<LayerGroup | null>(null);
   const trackCacheRef = useRef(new Map<string, Promise<PreparedTrack>>());
   const pendingDeepLinkRef = useRef<{ slug: string; timestampMs: number | null } | null>(null);
   const playheadRef = useRef(0);
@@ -462,6 +514,14 @@ export default function MovementExplorer() {
     () => people.find((person) => person.slug === selectedSlug) ?? null,
     [people, selectedSlug],
   );
+  const eveningBySlug = useMemo(
+    () => new Map(eveningPeople.map((person) => [person.slug, person])),
+    [eveningPeople],
+  );
+  const selectedEveningPerson = selectedPerson?.cohort_id === "dc-senate"
+    ? eveningBySlug.get(selectedPerson.slug) : undefined;
+  const eveningLocations = selectedEveningPerson?.id === selectedPerson?.id
+    ? selectedEveningPerson?.locations ?? NO_EVENING_LOCATIONS : NO_EVENING_LOCATIONS;
   const emptyTest2 = cohortFilter === "test-2" &&
     index?.cohorts.some((cohort) => cohort.id === "test-2" && cohort.device_count === 0);
   const showDcSenateContext = cohortFilter === "dc-senate" ||
@@ -607,6 +667,21 @@ export default function MovementExplorer() {
   }, [indexUrl, selectedPerson]);
 
   useEffect(() => {
+    let active = true;
+    fetch(new URL("data/dc-senate-cel.json", document.baseURI), { cache: "no-store" })
+      .then((response) => {
+        if (!response.ok) throw new Error(`Evening location request failed (${response.status}).`);
+        return response.json() as Promise<unknown>;
+      })
+      .then(parseEveningLocations)
+      .then((data) => { if (active) setEveningPeople(data); })
+      .catch((error) => {
+        if (active) setEveningError(error instanceof Error ? error.message : "Evening locations could not be loaded.");
+      });
+    return () => { active = false; };
+  }, []);
+
+  useEffect(() => {
     playheadRef.current = playheadMs;
   }, [playheadMs]);
 
@@ -657,6 +732,7 @@ export default function MovementExplorer() {
       elapsedLayerRef.current = L.layerGroup().addTo(initializedMap);
       pointsLayerRef.current = L.layerGroup().addTo(initializedMap);
       focusLayerRef.current = L.layerGroup().addTo(initializedMap);
+      eveningLayerRef.current = L.layerGroup().addTo(initializedMap);
       initializedMap.on("dragstart", () => setFollowPoint(false));
       mapRef.current = initializedMap;
       setLeaflet(L);
@@ -678,6 +754,7 @@ export default function MovementExplorer() {
       elapsedLayerRef.current = null;
       pointsLayerRef.current = null;
       focusLayerRef.current = null;
+      eveningLayerRef.current = null;
     };
   }, []);
 
@@ -708,6 +785,61 @@ export default function MovementExplorer() {
       animate: !prefersReducedMotion(),
     });
   }, [leaflet, selectedPerson]);
+
+  const fitEveningLocations = useCallback((includeRoute = false) => {
+    if (!leaflet || !mapRef.current || !eveningLocations.length) return;
+    const bounds = leaflet.latLngBounds(eveningLocations.map(
+      (location): [number, number] => [location.latitude, location.longitude],
+    ));
+    if (includeRoute && selectedPerson) {
+      const [minLon, minLat, maxLon, maxLat] = selectedPerson.bbox;
+      bounds.extend([minLat, minLon]).extend([maxLat, maxLon]);
+    }
+    setFollowPoint(false);
+    mapRef.current.fitBounds(bounds, {
+      padding: [72, 48], maxZoom: includeRoute ? 16 : 19, animate: !prefersReducedMotion(),
+    });
+  }, [eveningLocations, leaflet, selectedPerson]);
+
+  const focusEveningLocation = (location: EveningLocation) => {
+    setFollowPoint(false);
+    mapRef.current?.setView([location.latitude, location.longitude], 14, {
+      animate: !prefersReducedMotion(),
+    });
+  };
+
+  useEffect(() => {
+    const layer = eveningLayerRef.current;
+    if (!leaflet || !layer) return;
+    layer.clearLayers();
+    eveningLocations.forEach((location, locationIndex) => {
+      const label = `CEL ${locationIndex + 1}`;
+      const otherLocation = eveningLocations[1 - locationIndex];
+      const labelOnLeft = location.longitude < otherLocation.longitude ||
+        (location.longitude === otherLocation.longitude && locationIndex === 0);
+      const popup = document.createElement("div");
+      const heading = document.createElement("strong");
+      heading.textContent = `${selectedPerson?.alias} · ${label}`;
+      const coordinates = document.createElement("p");
+      coordinates.textContent = `${location.latitude.toFixed(6)}, ${location.longitude.toFixed(6)}`;
+      const area = document.createElement("p");
+      area.textContent = eveningArea(location);
+      const description = document.createElement("p");
+      description.textContent = "Simulated common evening location";
+      popup.append(heading, coordinates, area, description);
+      leaflet.marker([location.latitude, location.longitude], {
+        title: label,
+        alt: label,
+        icon: leaflet.divIcon({
+          className: `cel-marker cel-marker-${locationIndex + 1} cel-marker-${labelOnLeft ? "left" : "right"}`,
+          html: `<span>${label}</span>`,
+          iconSize: [58, 30],
+          iconAnchor: [labelOnLeft ? 58 : 0, 30],
+          popupAnchor: [0, -30],
+        }),
+      }).bindPopup(popup).addTo(layer);
+    });
+  }, [eveningLocations, leaflet, selectedPerson]);
 
   useEffect(() => {
     const routeLayer = routeLayerRef.current;
@@ -785,11 +917,16 @@ export default function MovementExplorer() {
         .addTo(pointsLayer);
     }
 
-    if (lastFittedSlugRef.current !== track.person.slug) {
-      lastFittedSlugRef.current = track.person.slug;
-      requestAnimationFrame(fitTrack);
+    const fitKey = `${track.person.slug}:${eveningLocations.length}`;
+    if (lastFittedSlugRef.current !== fitKey) {
+      const frame = requestAnimationFrame(() => {
+        lastFittedSlugRef.current = fitKey;
+        if (eveningLocations.length) fitEveningLocations(true);
+        else fitTrack();
+      });
+      return () => cancelAnimationFrame(frame);
     }
-  }, [fitTrack, fullSegments, goToFrame, leaflet, track]);
+  }, [eveningLocations, fitEveningLocations, fitTrack, fullSegments, goToFrame, leaflet, track]);
 
   useEffect(() => {
     const elapsedLayer = elapsedLayerRef.current;
@@ -1038,6 +1175,7 @@ export default function MovementExplorer() {
                   filteredPeople.map((person) => (
                     <option key={person.slug} value={person.slug}>
                       {person.alias} · [{person.cohort}] · {person.point_count.toLocaleString()} points
+                      {eveningBySlug.has(person.slug) ? " · 2 CELs" : ""}
                     </option>
                   ))
                 )}
@@ -1187,6 +1325,33 @@ export default function MovementExplorer() {
                 <p>Shows all available observations for each matching simulated track.
                   PIN reports no location accuracy; a point within a footprint does not confirm physical entry.</p>
               </aside>
+            ) : null}
+            {showDcSenateContext && eveningError ? <p className="inline-error" role="alert">{eveningError}</p> : null}
+            {eveningLocations.length ? (
+              <section className="evening-card" aria-labelledby="evening-title">
+                <div className="evening-heading">
+                  <div>
+                    <h2 id="evening-title">Both common evening locations</h2>
+                    <p>Estimated evening locations for this simulated person. Numbers identify locations, not confidence.</p>
+                  </div>
+                  <button type="button" onClick={() => fitEveningLocations()}>Show both CELs</button>
+                </div>
+                <div className="evening-locations">
+                  {eveningLocations.map((location, locationIndex) => (
+                    <button
+                      key={locationIndex}
+                      className={`evening-location evening-location-${locationIndex + 1}`}
+                      type="button"
+                      onClick={() => focusEveningLocation(location)}
+                      aria-label={`Zoom to CEL ${locationIndex + 1}`}
+                    >
+                      <strong>CEL {locationIndex + 1}</strong>
+                      <span>{eveningArea(location)}</span>
+                      <code>{location.latitude.toFixed(6)}, {location.longitude.toFixed(6)}</code>
+                    </button>
+                  ))}
+                </div>
+              </section>
             ) : null}
             <div className="map-frame">
               <div

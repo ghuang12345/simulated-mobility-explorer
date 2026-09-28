@@ -127,6 +127,54 @@ test("Test 2 exposes the empty direct PIN geofence result", async () => {
   assert.equal(pointCount, 0);
 });
 
+test("simulated Senate CEL pairs preserve both locations with allowlisted fields", async () => {
+  const [index, cel] = await Promise.all([
+    readFile(new URL("../public/data/index.json", import.meta.url), "utf8").then(JSON.parse),
+    readFile(new URL("../public/data/dc-senate-cel.json", import.meta.url), "utf8").then(JSON.parse),
+  ]);
+  assert.deepEqual(Object.keys(cel).sort(), ["people", "schema_version", "simulated"]);
+  assert.equal(cel.schema_version, 1);
+  assert.equal(cel.simulated, true);
+  assert.equal(cel.people.length, 89);
+  assert.equal(new Set(cel.people.map((person) => person.id)).size, 89);
+  assert.equal(new Set(cel.people.map((person) => person.slug)).size, 89);
+  const dcPeople = new Map(index.people
+    .filter((person) => person.cohort_id === "dc-senate")
+    .map((person) => [person.id, person]));
+  let locationCount = 0;
+  for (const person of cel.people) {
+    assert.deepEqual(Object.keys(person).sort(), ["id", "locations", "slug"]);
+    assert.ok(dcPeople.has(person.id));
+    assert.equal(person.slug, dcPeople.get(person.id).slug);
+    assert.equal(person.locations.length, 2);
+    assert.notDeepEqual(
+      [person.locations[0].latitude, person.locations[0].longitude],
+      [person.locations[1].latitude, person.locations[1].longitude],
+    );
+    for (const location of person.locations) {
+      assert.deepEqual(Object.keys(location).sort(), [
+        "country", "county", "latitude", "longitude", "postal", "state",
+      ]);
+      assert.ok(Number.isFinite(location.latitude) && Math.abs(location.latitude) <= 90);
+      assert.ok(Number.isFinite(location.longitude) && Math.abs(location.longitude) <= 180);
+      for (const field of ["county", "state", "postal", "country"]) {
+        assert.equal(typeof location[field], "string");
+      }
+      locationCount += 1;
+    }
+  }
+  assert.equal(locationCount, 178);
+  // Original source-row order defines CEL 1 and CEL 2, without ranking either.
+  assert.deepEqual(cel.people.find((person) => person.slug === "f7d76b54287d3c2a").locations, [
+    { latitude: 40.250205, longitude: -76.891674, county: "Cumberland County", state: "PA", postal: "17043", country: "USA" },
+    { latitude: 38.532024, longitude: -89.998783, county: "St. Clair County", state: "IL", postal: "62226", country: "USA" },
+  ]);
+  assert.deepEqual(cel.people.find((person) => person.slug === "d75c3f6759445fec").locations, [
+    { latitude: 38.904127, longitude: -77.001851, county: "District of Columbia", state: "DC", postal: "20002", country: "USA" },
+    { latitude: 26.257209, longitude: -98.181625, county: "Hidalgo County", state: "TX", postal: "78539", country: "USA" },
+  ]);
+});
+
 test("production export carries every derived asset", async () => {
   const [sourceTracks, exportedTracks, exportedIndex] = await Promise.all([
     readdir(new URL("../public/data/tracks/", import.meta.url)),
@@ -136,6 +184,14 @@ test("production export carries every derived asset", async () => {
 
   assert.deepEqual(exportedTracks.sort(), sourceTracks.sort());
   assert.ok(exportedIndex.size > 200_000);
+});
+
+test("production export carries the separate CEL metadata asset", async () => {
+  const [source, exported] = await Promise.all([
+    readFile(new URL("../public/data/dc-senate-cel.json", import.meta.url), "utf8"),
+    readFile(new URL("../dist/client/data/dc-senate-cel.json", import.meta.url), "utf8"),
+  ]);
+  assert.equal(exported, source);
 });
 
 void projectRoot;

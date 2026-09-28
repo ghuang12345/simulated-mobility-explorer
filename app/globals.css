@@ -407,6 +407,23 @@ code { font-family: var(--mono); }
 .cohort-context p + p { margin-top: 4px; }
 .cohort-context strong { color: var(--mint); }
 
+.evening-card { padding: 14px; border: 1px solid var(--line-bright); border-radius: 10px; background: var(--surface); }
+.evening-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.evening-heading h2 { margin: 0; font-size: 15px; }
+.evening-heading p { margin: 5px 0 12px; color: var(--muted); font-size: 11px; }
+.evening-heading > button { flex-shrink: 0; padding: 8px 12px; border: 1px solid var(--line-bright); border-radius: 7px; background: var(--surface-raised); color: var(--text); font-size: 11px; }
+.evening-locations { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.evening-location { min-width: 0; display: grid; gap: 5px; padding: 10px 12px; border: 1px solid var(--line); border-left: 3px solid #b494ef; border-radius: 7px; background: var(--surface-raised); color: var(--text); text-align: left; }
+.evening-location-2 { border-left-color: #ffad68; }
+.evening-location strong { color: #c9b1f6; font-size: 12px; }
+.evening-location-2 strong { color: #ffbd89; }
+.evening-location span { font-size: 11px; overflow-wrap: anywhere; }
+.evening-location code { color: var(--muted); font-size: 10px; }
+.cel-marker { border: 2px solid #fff; border-radius: 7px 7px 7px 0; background: #6940a5; color: #fff; box-shadow: 0 2px 8px #0006; text-align: center; font: 700 11px/26px var(--sans); }
+.cel-marker-2 { background: #a64d0a; }
+.cel-marker-left { border-radius: 7px 7px 0 7px; }
+.cel-marker:focus-visible { outline: 3px solid #111; outline-offset: 2px; }
+
 .map-frame {
   position: relative;
   min-width: 0;
@@ -540,6 +557,8 @@ tbody th button { min-width: 34px; border: 0; border-radius: 4px; background: tr
 }
 
 @media (max-width: 560px) {
+  .evening-heading { flex-wrap: wrap; gap: 0; margin-bottom: 10px; }
+  .evening-locations { grid-template-columns: 1fr; }
   .movement-explorer { padding: 8px; }
   .explorer-header { align-items: flex-start; padding: 6px 3px 14px; }
   .explorer-heading h1 { font-size: 36px; }
